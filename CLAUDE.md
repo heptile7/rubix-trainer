@@ -97,6 +97,7 @@ The GUI can be driven without user input: build `CubeTimerApp()`, call `app.show
 - **Pictures.** Case pictures are computed once in `create_app` (about 0.4 s).
 - **Endpoints:** `/api/deal/{mode}/{case}` (setup scramble and its picture), `/api/times`, `/api/times/last/{mode}`, `/api/times/{mode}`, `/api/summary/{mode}`, `/api/selected/{mode}`, `/api/status/{mode}`, `/api/groups/{mode}/{name}`, `/api/state`, `/api/log`. The docs are at `/api/docs`.
 - **Static files** are served with ETags and `no-cache`, so edits show up on reload.
+- **Dependency check.** `check_dependencies()` runs at import, before fastapi is imported. It exits with a message naming any missing or too-old package (`MIN_VERSIONS`). Keep `MIN_VERSIONS` in step with `requirements.txt`. The user has an old virtualenv with fastapi 0.70 and pydantic 1.8; pydantic 1.8 crashes on import under Python 3.11.
 
 **Client (`web/js`).**
 - `store.js` ports `SelectionStore`, with the same methods in camelCase. It changes memory first, then saves through `api.js`, which queues writes so they keep their order. If a write fails, the client reloads `/api/state`.
