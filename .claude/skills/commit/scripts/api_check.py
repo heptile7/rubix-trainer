@@ -95,6 +95,25 @@ with TestClient(app) as c:
     check("client log", c.post("/api/log", json={"message": "test from api_test"}).status_code == 200)
     check("docs", c.get("/api/docs").status_code == 200)
 
+# dependency check: too-old packages give a clear exit message, not a crash
+real_version = cube_web.version
+try:
+    cube_web.version = lambda pkg: {"fastapi": "0.70.1", "pydantic": "1.8.2"}.get(pkg, "99.0")
+    try:
+        cube_web.check_dependencies(); msg = ""
+    except SystemExit as exc:
+        msg = str(exc)
+    check("old packages named on exit", "fastapi: 0.70.1 is too old" in msg and "pydantic: 1.8.2" in msg
+          and "pip install --upgrade -r" in msg)
+    cube_web.version = lambda pkg: "99.0"
+    try:
+        cube_web.check_dependencies(); ok = True
+    except SystemExit:
+        ok = False
+    check("current packages pass", ok)
+finally:
+    cube_web.version = real_version
+
 after = hashlib.md5(open(REAL, "rb").read()).hexdigest()
 check("real DB untouched", before == after)
 fails = [r for r in results if not r[1]]

@@ -11,20 +11,50 @@ only reads and writes SQLite and makes scrambles.
     python cube_web.py --window      # own window instead (needs: pip install pywebview)
     python cube_web.py --no-browser  # just serve (prints the address)
 
-Requirements: pip install fastapi uvicorn rich
+Requirements: pip install -r requirements.txt  (fastapi, uvicorn, pydantic, rich)
 """
 
 import argparse
 import json
 import logging
+import re
 import socket
+import sys
 import threading
 import time
 import webbrowser
 from contextlib import asynccontextmanager
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+# Oldest versions that work (keep in step with requirements.txt). Checked before
+# importing them: an old pydantic (< 1.10) doesn't merely lack features, it
+# crashes on import under Python 3.11 ("'not' is not a valid parameter name").
+MIN_VERSIONS = {"fastapi": (0, 110), "uvicorn": (0, 29), "pydantic": (1, 10), "rich": (13, 0)}
+
+
+def check_dependencies():
+    """Exit with a clear message if a package is missing or too old for this app."""
+    problems = []
+    for package, minimum in MIN_VERSIONS.items():
+        try:
+            found = version(package)
+        except PackageNotFoundError:
+            problems.append(f"  {package}: not installed (need {'.'.join(map(str, minimum))} or later)")
+            continue
+        parts = tuple(int(n) for n in re.findall(r"\d+", found)[:2])
+        if parts < minimum:
+            problems.append(f"  {package}: {found} is too old (need {'.'.join(map(str, minimum))} or later)")
+    if problems:
+        sys.exit("Cube Timer web app can't start with this Python's packages:\n"
+                 + "\n".join(problems)
+                 + f"\n\nPython: {sys.executable}\nFix:    \"{sys.executable}\" -m pip install "
+                 f"--upgrade -r \"{Path(__file__).with_name('requirements.txt')}\"")
+
+
+check_dependencies()
+
+from fastapi import FastAPI, HTTPException, Request  # noqa: E402  (after the check above)
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles

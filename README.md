@@ -21,7 +21,11 @@ Requires Python 3.10 or later (developed on 3.11) with Tk, which ships with the 
 pip install -r requirements.txt
 ```
 
-This installs `rich` (terminal output), `customtkinter` (desktop app), and `fastapi` with `uvicorn` (web app). For the web app in its own window, also run `pip install pywebview`.
+This installs `rich` (terminal output), `customtkinter` (desktop app), and `fastapi`, `uvicorn` and `pydantic` (web app). For the web app in its own window, also run `pip install pywebview`.
+
+Install into the same Python you run the app with. If you use a virtualenv, activate it first, or run `path	oenv\Scripts\python.exe -m pip install --upgrade -r requirements.txt`.
+
+**If the web app won't start:** it checks its packages first. When one is missing or too old, it names it, for example `fastapi: 0.70.1 is too old`. It also prints the exact command to fix it for the Python you used. Very old versions crash under Python 3.11, with errors such as `ValueError: 'not' is not a valid parameter name` from pydantic 1.8. Upgrading fixes that.
 
 ## Running
 
