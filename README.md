@@ -2,41 +2,80 @@
 
 A Rubik's Cube practice timer for full solves and last-layer drills. It covers all 57 OLL cases and all 21 PLL cases, shows a picture of each case, and keeps every time in a local SQLite database so you can track progress.
 
-There are three front ends that share the same data:
+You can run it in three ways. All three read and write the same database, `cube_times.db`, so your times follow you whichever you use.
 
-- **Web app** (`cube_web.py`) — runs in your browser. The fastest one: every page opens instantly.
-- **GUI** (`cube_timer_gui.py`) — the original desktop window (customtkinter). Same features as the web app.
-- **CLI** (`cube_timer.py`) — a terminal version.
+| | Web app (recommended) | Desktop app | Terminal app |
+| --- | --- | --- | --- |
+| Start it with | `python cube_web.py` | `python cube_timer_gui.py` | `python cube_timer.py` |
+| What you get | A page in your browser, or in its own window | A desktop window | Menus and a timer in the terminal |
+| Features | Everything | Everything | Full solves with scrambles, OLL / PLL drills, stats. The drills show the algorithm only (you set the case up yourself): no pictures, setup scrambles, selections, statuses or groups. |
+| Speed | Pages open in a few milliseconds | Pages take 0.2–2.6 s to open the first time | Instant (text only) |
+| Needs | `fastapi`, `uvicorn`, `rich`, Tk | `customtkinter`, `rich`, Tk | `rich` |
+| Stop it with | **Ctrl+C** in the terminal (or close the window, with `--window`) | Close the window | `q` at the main menu, or **Ctrl+C** |
 
 ## Setup
 
-Requires Python 3 (developed on 3.11) with Tk, which ships with the standard Windows installer.
+Requires Python 3.10 or later (developed on 3.11) with Tk, which ships with the standard Windows installer.
 
 ```
 pip install -r requirements.txt
 ```
 
-This installs `rich` (terminal output), `customtkinter` (GUI), and `fastapi` with `uvicorn` (web app).
+This installs `rich` (terminal output), `customtkinter` (desktop app), and `fastapi` with `uvicorn` (web app). For the web app in its own window, also run `pip install pywebview`.
 
 ## Running
 
+### Web app: `cube_web.py`
+
 ```
-python cube_web.py           # web app: opens in your default browser
-python cube_timer_gui.py     # desktop app
-python cube_timer.py         # terminal app
+python cube_web.py                 # serve and open in your default browser
+python cube_web.py --window        # serve and open in its own window (needs pywebview)
+python cube_web.py --no-browser    # serve only; open the printed address yourself
+python cube_web.py --port 9000     # use a particular port (combine with any of the above)
 ```
 
-The web app runs a small server on your own computer (`http://127.0.0.1:8765/`, or the next free port) and opens the page. Stop it with **Ctrl+C** in its terminal. Options:
+**How it runs:**
 
-- `--no-browser`: just start the server and print its address.
-- `--port N`: use a particular port.
-- `--window`: open the app in its own window instead of a browser tab. This needs `pip install pywebview`.
+1. It starts a small web server on your own computer, on `http://127.0.0.1:8765/`, or the next free port if 8765 is taken. The terminal prints the address.
+2. It works out every case picture once, which takes about 0.4 s.
+3. It opens the address in your default browser. With `--window`, it opens a desktop window instead, using the Edge WebView2 that comes with Windows 10 and 11. With `--no-browser`, it opens nothing.
+4. The page talks to the server for everything it saves: times, selections, statuses and groups. The terminal window has to stay open while you use the app.
+
+**Things to know:**
+
+- **Closing the tab doesn't stop the server.** Open the address again to carry on, or press **Ctrl+C** in the terminal to stop it. With `--window`, closing the window stops the server too.
+- **Only this computer can open it.** The server listens on `127.0.0.1`, so other devices on your network can't reach it.
+- **With `--port N`, the port has to be free.** If something else is using it, the server fails to start. Without `--port`, it picks a free one itself.
+- **Start it once.** Starting it a second time runs a second server on the next port, over the same database. See *Use one at a time* below.
+- **`--window` needs `pywebview`.** Without it, `--window` stops with a message telling you to install it.
+
+### Desktop app: `cube_timer_gui.py`
+
+```
+python cube_timer_gui.py
+```
+
+This opens a window with the same pages and features as the web app, drawn with customtkinter. There's no server: the window reads and writes the database directly. Only the Full Solve page is built at startup, which takes about 0.6 s. The other pages are built the first time you open them, which takes up to 2.6 s for the Case Gallery.
+
+### Terminal app: `cube_timer.py`
+
+```
+python cube_timer.py
+```
+
+This shows a menu: **1** Full Solve, **2** OLL Practice, **3** PLL Practice, **4** Statistics, **q** Quit. In a timing screen, press **Enter** to start, **Enter** again to stop, or type `q` then **Enter** to cancel. See [CLI](#cli) below.
+
+### Use one at a time
+
+The web app and the desktop app each load your selection, statuses and groups when they start, and keep them in memory. If both run at once, changes made in one don't appear in the other, and the last one to save wins. Times are safe either way, because every attempt is added as its own row. Close one before you start the other.
 
 ### Web app or desktop app?
 
-They have the same pages and features and use the same database. Use one at a time: each keeps your selection and groups in memory while it runs.
+They have the same pages and features, so choose the web app unless you prefer a classic window. It is much faster:
 
-The web app is much faster. Its pages are built in a few milliseconds, against 0.2–2.6 s in the desktop app, and switching pages takes one frame. Moving to the next case is instant, because the next scramble is fetched while you solve. Case pictures stay sharp at any size, and the layout adapts to any window width, down to a phone.
+- Its pages are built in a few milliseconds, and switching pages takes one frame.
+- Moving to the next case is instant, because the next scramble is fetched while you solve.
+- Case pictures stay sharp at any size, and the layout fits any window width.
 
 Two small differences in the web app:
 
@@ -108,11 +147,11 @@ Every picture is a top-down view of the last layer, held with yellow on top and 
 
 ## CLI
 
-Pick a mode from the menu. In a timing screen, press **Enter** to start, **Enter** again to stop, or type `q` then **Enter** to cancel. After each attempt a prompt offers the next case, stats, picking a case by number, an OLL group filter, and deleting the last time.
+Pick a mode from the menu. Full Solve shows a scramble. OLL and PLL practice show a random case's name and algorithm; set the case up on your cube yourself, then time the algorithm. In a timing screen, press **Enter** to start, **Enter** again to stop, or type `q` then **Enter** to cancel. After each attempt a prompt offers the next case, stats, picking a case by number, an OLL group filter, and deleting the last time.
 
 ## Data
 
-Times, your selected practice sets, case statuses and your own groups are stored in `cube_times.db`, created next to the scripts on first run. Both front ends read and write the same file. The terminal app does not use the selected sets, statuses or scrambles. Delete it to start over; copy it to back up your history.
+Times, your selected practice sets, case statuses and your own groups are stored in `cube_times.db`, created next to the scripts on first run. All three apps read and write the same file (see *Use one at a time* above). The terminal app records times only; it does not use the selected sets, statuses, groups or case scrambles. Delete it to start over; copy it to back up your history.
 
 The apps write a log to `cube_timer.log` (next to the scripts, rotated at 512 KB): startup time, each saved attempt, status and group changes, and any errors (for the web app, also errors in the browser page). Set the environment variable `CUBE_TIMER_DEBUG=1` before starting it to also log every selection change. The log is not committed to git.
 
