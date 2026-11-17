@@ -9,6 +9,7 @@ Requirements: pip install rich
 
 import time
 import sqlite3
+import json
 import random
 import sys
 import threading
@@ -165,6 +166,33 @@ def case_scramble(alg):
     recognised rather than always arriving the same way round.
     """
     moves = [random.choice(_AUF)] + invert_alg(alg).split() + [random.choice(_AUF)]
+    return _merge_u(moves)
+
+
+_SCRAMBLE_FILE = Path(__file__).with_name("case_scrambles.json")
+_scramble_bank = None
+
+
+def setup_scramble(case):
+    """
+    Scramble for practising a case. Uses a solver-made scramble from
+    case_scrambles.json (see make_scrambles.py) with an extra random turn of
+    the top layer; falls back to case_scramble() if the case has none.
+    """
+    global _scramble_bank
+    if _scramble_bank is None:
+        try:
+            _scramble_bank = json.loads(_SCRAMBLE_FILE.read_text())["scrambles"]
+        except (OSError, ValueError, KeyError):
+            _scramble_bank = {}
+    options = _scramble_bank.get(case["name"])
+    if not options:
+        return case_scramble(case["alg"])
+    return _merge_u(random.choice(options).split() + [random.choice(_AUF)])
+
+
+def _merge_u(moves):
+    """Join moves, combining neighbouring U turns (U + U2 -> U')."""
     merged = []
     for m in moves:
         if not m:
@@ -223,7 +251,43 @@ class Database:
                 PRIMARY KEY (mode, case_name)
             )
         """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS case_status (
+                mode      TEXT NOT NULL,
+                case_name TEXT NOT NULL,
+                status    TEXT NOT NULL,
+                PRIMARY KEY (mode, case_name)
+            )
+        """)
         self.conn.commit()
+
+    def get_statuses(self, mode):
+        """{case name: status} for cases marked learning / finished."""
+        cur = self.conn.execute(
+            "SELECT case_name,status FROM case_status WHERE mode=?", (mode,))
+        return dict(cur.fetchall())
+
+    def set_status(self, mode, name, status):
+        if status == "unlearned":
+            self.conn.execute(
+                "DELETE FROM case_status WHERE mode=? AND case_name=?", (mode, name))
+        else:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO case_status (mode,case_name,status) VALUES (?,?,?)",
+                (mode, name, status))
+        self.conn.commit()
+
+    def recent_means(self, mode, n=5):
+        """{case name: mean of its latest n times}."""
+        cur = self.conn.execute(
+            "SELECT case_name,seconds FROM times WHERE mode=? AND case_name IS NOT NULL "
+            "ORDER BY rowid DESC", (mode,))
+        latest = {}
+        for name, seconds in cur:
+            times = latest.setdefault(name, [])
+            if len(times) < n:
+                times.append(seconds)
+        return {name: sum(t) / len(t) for name, t in latest.items()}
 
     def get_selected(self, mode):
         """Names of the cases picked for practice in this mode."""

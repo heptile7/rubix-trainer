@@ -18,11 +18,11 @@ from cube_timer import (
     PLL_CASES,
     Database,
     calc_ao,
-    case_scramble,
     fmt,
     generate_scramble,
+    setup_scramble,
 )
-from cube_diagram import CaseDiagram
+from cube_diagram import CaseDiagram, case_weight
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -34,6 +34,9 @@ C_IDLE   = "gray55"
 C_RUNNING = "#00cc44"
 C_STOPPED = "#ffcc00"
 C_PANEL   = "#2b2b2b"        # panel / card background (case diagrams sit on it)
+
+STATUSES = ["unlearned", "learning", "finished"]
+STATUS_COLOR = {"unlearned": "gray50", "learning": "#ff9f1c", "finished": "#3fa7ff"}
 
 FONT_TIMER  = ("Consolas",   72, "bold")
 FONT_MONO   = ("Consolas",   14)
@@ -287,17 +290,20 @@ class CaseTrainerScreen(TimerScreenBase):
     shows a scramble that sets it up, and records the time against the case.
     """
 
-    SRC_ALL = "All cases"
+    SLOWEST_COUNT = 10
 
-    def __init__(self, parent, root, db, mode, title, selection):
+    def __init__(self, parent, root, db, mode, title, selection, statuses):
         super().__init__(parent, root, db)
         self.mode      = mode                 # "oll" | "pll"
         self.title     = title
         self.cases     = CASES[mode]
         self.selection = selection            # shared set of names, edited in the gallery
+        self.statuses  = statuses             # shared {name: status}, unlearned left out
         self.groups    = sorted({c["group"] for c in self.cases})
 
-        self._source       = "all"            # "all" | "selected" | a group name
+        # "all" | "selected" | "slowest" | "status:<status>" | "group:<name>"
+        self._source       = "all"
+        self._source_keys  = {}               # menu label -> source key
         self._current_case = None
         self._scramble     = ""
         self._build_ui()
@@ -306,10 +312,10 @@ class CaseTrainerScreen(TimerScreenBase):
 
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(3, weight=1)
+        self.grid_rowconfigure(4, weight=1)
 
         ctk.CTkLabel(self, text=self.title, font=ctk.CTkFont(size=20, weight="bold")).grid(
-            row=0, column=0, pady=(24, 8))
+            row=0, column=0, pady=(18, 6))
 
         # --- Source / case pickers ---
         filter_row = ctk.CTkFrame(self, fg_color="transparent")
@@ -317,12 +323,12 @@ class CaseTrainerScreen(TimerScreenBase):
 
         ctk.CTkLabel(filter_row, text="From:", font=ctk.CTkFont(size=13)).grid(
             row=0, column=0, padx=(0, 6))
-        self.source_var = ctk.StringVar(value=self.SRC_ALL)
+        self.source_var = ctk.StringVar()
         self.source_menu = ctk.CTkOptionMenu(
-            filter_row, values=self._source_options(), variable=self.source_var,
+            filter_row, values=[""], variable=self.source_var,
             width=165, command=self._on_source_change,
         )
-        self.source_menu.grid(row=0, column=1, padx=(0, 24))
+        self.source_menu.grid(row=0, column=1, padx=(0, 18))
 
         ctk.CTkLabel(filter_row, text="Case:", font=ctk.CTkFont(size=13)).grid(
             row=0, column=2, padx=(0, 6))
@@ -330,13 +336,34 @@ class CaseTrainerScreen(TimerScreenBase):
         self.case_combo = ctk.CTkComboBox(
             filter_row, variable=self.case_var,
             values=["Random"] + [c["name"] for c in self.cases],
-            width=165, command=self._on_case_change,
+            width=150, command=self._on_case_change,
         )
-        self.case_combo.grid(row=0, column=3)
+        self.case_combo.grid(row=0, column=3, padx=(0, 18))
+
+        ctk.CTkLabel(filter_row, text="Odds:", font=ctk.CTkFont(size=13)).grid(
+            row=0, column=4, padx=(0, 6))
+        self.odds = ctk.CTkSegmentedButton(filter_row, values=["Balanced", "Realistic"])
+        self.odds.set("Balanced")
+        self.odds.grid(row=0, column=5)
+
+        # --- Status of the current case, hint toggle ---
+        opt_row = ctk.CTkFrame(self, fg_color="transparent")
+        opt_row.grid(row=2, column=0, pady=4)
+
+        ctk.CTkLabel(opt_row, text="This case:", font=ctk.CTkFont(size=13)).grid(
+            row=0, column=0, padx=(0, 6))
+        self.status_seg = ctk.CTkSegmentedButton(
+            opt_row, values=[s.title() for s in STATUSES], command=self._on_status_change)
+        self.status_seg.grid(row=0, column=1, padx=(0, 24))
+
+        self.hint_switch = ctk.CTkSwitch(opt_row, text="Show algorithm",
+                                         command=self._show_alg)
+        self.hint_switch.select()
+        self.hint_switch.grid(row=0, column=2)
 
         # --- Case panel (picture, name, algorithm, scramble) ---
         case_panel = ctk.CTkFrame(self, corner_radius=8)
-        case_panel.grid(row=2, column=0, padx=20, pady=6, sticky="ew")
+        case_panel.grid(row=3, column=0, padx=20, pady=6, sticky="ew")
         self._build_case_panel(case_panel)
 
         # --- Timer ---
@@ -345,16 +372,16 @@ class CaseTrainerScreen(TimerScreenBase):
             font=ctk.CTkFont(family="Consolas", size=72, weight="bold"),
             text_color=C_IDLE,
         )
-        self.timer_label.grid(row=3, column=0, pady=8)
+        self.timer_label.grid(row=4, column=0, pady=4)
 
         self.status_label = ctk.CTkLabel(
             self, text="", font=ctk.CTkFont(size=12), text_color="gray55",
         )
-        self.status_label.grid(row=4, column=0, pady=(0, 6))
+        self.status_label.grid(row=5, column=0, pady=(0, 4))
 
         # --- Buttons ---
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
-        btn_row.grid(row=5, column=0, pady=8)
+        btn_row.grid(row=6, column=0, pady=6)
 
         self.start_btn = ctk.CTkButton(
             btn_row, text="Start  [space]", width=150, height=42,
@@ -377,11 +404,11 @@ class CaseTrainerScreen(TimerScreenBase):
         self.result_label = ctk.CTkLabel(
             self, text="", font=ctk.CTkFont(size=13), text_color="gray65",
         )
-        self.result_label.grid(row=6, column=0, pady=(4, 20))
+        self.result_label.grid(row=7, column=0, pady=(4, 16))
 
         # --- History (latest attempts across all cases in this mode) ---
         side = ctk.CTkFrame(self, fg_color=C_PANEL, corner_radius=8, width=200)
-        side.grid(row=0, column=1, rowspan=7, padx=(0, 16), pady=(24, 20), sticky="ns")
+        side.grid(row=0, column=1, rowspan=8, padx=(0, 16), pady=(20, 16), sticky="ns")
         side.grid_propagate(False)
         side.grid_columnconfigure(0, weight=1)
         side.grid_rowconfigure(2, weight=1)
@@ -398,26 +425,38 @@ class CaseTrainerScreen(TimerScreenBase):
     # ------------------------------------------------------------------
     # Where cases are drawn from
     # ------------------------------------------------------------------
-    def _selected_label(self):
-        return f"Selected ({len(self.selection)})"
+    def _status(self, case):
+        return self.statuses.get(case["name"], "unlearned")
 
     def _source_options(self):
-        return [self.SRC_ALL, self._selected_label()] + self.groups
+        """(key, menu label) for every place cases can be drawn from."""
+        opts = [("all", "All cases"), ("selected", f"Selected ({len(self.selection)})"),
+                ("slowest", f"Slowest {self.SLOWEST_COUNT}")]
+        for status in STATUSES:
+            n = sum(1 for c in self.cases if self._status(c) == status)
+            opts.append((f"status:{status}", f"{status.title()} ({n})"))
+        opts += [(f"group:{g}", g) for g in self.groups]
+        return opts
 
     def _pool(self):
-        if self._source == "all":
+        kind, _, arg = self._source.partition(":")
+        if kind == "all":
             return self.cases
-        if self._source == "selected":
+        if kind == "selected":
             return [c for c in self.cases if c["name"] in self.selection]
-        return [c for c in self.cases if c["group"] == self._source]
+        if kind == "slowest":
+            # slowest recent average among the selected cases (all if none selected)
+            base = [c for c in self.cases if c["name"] in self.selection] or self.cases
+            means = self.db.recent_means(self.mode)
+            timed = sorted((c for c in base if c["name"] in means),
+                           key=lambda c: -means[c["name"]])
+            return timed[:self.SLOWEST_COUNT]
+        if kind == "status":
+            return [c for c in self.cases if self._status(c) == arg]
+        return [c for c in self.cases if c["group"] == arg]
 
-    def _on_source_change(self, value):
-        if value == self.SRC_ALL:
-            self.set_source("all")
-        elif value == self._selected_label():
-            self.set_source("selected")
-        else:
-            self.set_source(value)
+    def _on_source_change(self, label):
+        self.set_source(self._source_keys.get(label, "all"))
 
     def set_source(self, source):
         """Switch the pool cases are drawn from and deal a new case."""
@@ -427,19 +466,42 @@ class CaseTrainerScreen(TimerScreenBase):
         self._pick_next_case()
 
     def _sync_pickers(self):
-        labels = {"all": self.SRC_ALL, "selected": self._selected_label()}
-        self.source_menu.configure(values=self._source_options())
-        self.source_var.set(labels.get(self._source, self._source))
+        opts = self._source_options()
+        self._source_keys = {label: key for key, label in opts}
+        self.source_menu.configure(values=[label for _, label in opts])
+        self.source_var.set(dict(opts).get(self._source, "All cases"))
         self.case_combo.configure(
             values=["Random"] + [c["name"] for c in (self._pool() or self.cases)])
 
     def on_show(self):
-        """Called when the screen is opened: the selection may have changed."""
+        """Called when the screen is opened: selection or statuses may have changed."""
         self._sync_pickers()
-        if self._source == "selected" and self.case_var.get() == "Random":
-            if self._current_case is None or self._current_case["name"] not in self.selection:
+        if self.case_var.get() == "Random" and self._source != "all":
+            if self._current_case is None or self._current_case not in self._pool():
                 self._pick_next_case()
+        if self._current_case:
+            self.status_seg.set(self._status(self._current_case).title())
         self._refresh_history()
+
+    def _on_status_change(self, value):
+        if not self._current_case:
+            return
+        status = value.lower()
+        name = self._current_case["name"]
+        if status == "unlearned":
+            self.statuses.pop(name, None)
+        else:
+            self.statuses[name] = status
+        self.db.set_status(self.mode, name, status)
+        self._sync_pickers()
+
+    def _show_alg(self):
+        if self.hint_switch.get():
+            self.case_alg_label.configure(
+                text=self._current_case["alg"] if self._current_case else "",
+                text_color="#ffcc00")
+        else:
+            self.case_alg_label.configure(text="algorithm hidden", text_color="gray45")
 
     def select_case(self, case):
         """Practise one specific case (used by the case gallery)."""
@@ -466,24 +528,33 @@ class CaseTrainerScreen(TimerScreenBase):
             pool = self._pool()
             if not pool:
                 pool = self.cases
-                note = "Nothing selected yet - pick cases in the Case Gallery. Using all cases."
+                note = {
+                    "selected": "Nothing selected yet - pick cases in the Case Gallery.",
+                    "slowest":  "No times yet to find the slowest cases.",
+                    "status":   "No cases have that status yet.",
+                }.get(self._source.partition(":")[0], "No cases here.") + " Using all cases."
             # don't deal the same case twice in a row when there is a choice
             choices = [c for c in pool if c is not self._current_case] or pool
-            case = random.choice(choices)
+            if self.odds.get() == "Realistic":
+                case = random.choices(
+                    choices, weights=[case_weight(c["alg"]) for c in choices])[0]
+            else:
+                case = random.choice(choices)
         self._load_case(case, note)
 
     def _load_case(self, case, note=None):
         self._cancel_timer()
         self._reset_display()
         self._current_case = case
-        self._scramble     = case_scramble(case["alg"])
+        self._scramble     = setup_scramble(case)
         self.case_name_label.configure(text=case["name"])
         self.case_group_label.configure(text=case["group"])
-        self.case_alg_label.configure(text=case["alg"])
+        self._show_alg()
+        self.status_seg.set(self._status(case).title())
         self.case_scramble_label.configure(text=self._scramble)
         self.case_diagram.set_scramble(self._scramble)
         self.status_label.configure(
-            text=note or "Apply the scramble to a solved cube, then press SPACE to start")
+            text=note or "Scramble from solved (yellow top, green front), then press SPACE")
         self._refresh_result_bar()
 
     def _next(self):

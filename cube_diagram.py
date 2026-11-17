@@ -111,6 +111,29 @@ def is_last_layer_case(alg):
                for pos, facing, color, _ in state if pos[1] <= 0)
 
 
+@lru_cache(maxsize=None)
+def case_weight(alg):
+    """
+    How often the case comes up in real solves, relative to other cases of its
+    kind: the number of different-looking last layers it covers, counting every
+    turn of the top layer before and after. A symmetric case covers fewer (PLL:
+    H/Na/Nb 4, E/Z 8, the rest 16; for OLL only the yellow pattern counts:
+    OLL 20 1, OLL 1/21/55/56/57 2, the rest 4).
+    """
+    inverse = [(axis, layers, 4 - turns) for axis, layers, turns in reversed(_parse(alg))]
+    pll = all(c == YELLOW for c in case_diagram(alg)[0].values())
+    looks = set()
+    for a in range(4):
+        for b in range(4):
+            state = _apply(_solved(), [(1, (1,), a)] + inverse + [(1, (1,), b)])
+            top = [(pos, facing, color) for pos, facing, color, _ in state if pos[1] == 1]
+            if pll:
+                looks.add(frozenset(top))
+            else:
+                looks.add(frozenset((pos, facing) for pos, facing, c in top if c == YELLOW))
+    return len(looks)
+
+
 def _arrows(state):
     """Where each top-layer piece has to travel: [((x, z), (x, z), is_swap)]."""
     pieces = [(pos, home) for pos, facing, _, home in state
