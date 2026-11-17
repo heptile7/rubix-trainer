@@ -13,13 +13,16 @@ pip install -r requirements.txt   # rich, customtkinter
 python cube_timer_gui.py          # GUI
 python cube_timer.py              # terminal app (interactive, blocks on input)
 python cube_diagram.py            # validate every OLL/PLL algorithm
+python make_scrambles.py [n]      # regenerate case_scrambles.json (n per case, default 10; ~90 s)
 ```
 
 There is no test suite. `python cube_diagram.py` is the only automated check: run it after touching any algorithm or the simulator. It must print `All OLL and PLL algorithms check out.`
 
 ## Layout
 
-- `cube_timer.py` — the data layer and the CLI in one file: `OLL_CASES`, `PLL_CASES`, `generate_scramble`, `invert_alg`, `case_scramble`, `fmt`, `calc_ao`, `Database`, then the `rich`-based terminal modes.
+- `cube_timer.py` — the data layer and the CLI in one file: `OLL_CASES`, `PLL_CASES`, `generate_scramble`, `invert_alg`, `case_scramble`, `setup_scramble`, `fmt`, `calc_ao`, `Database`, then the `rich`-based terminal modes.
+- `make_scrambles.py` — standalone pure-Python Kociemba two-phase solver (cubie model, move/pruning tables cached as a pickle in the system temp folder) that writes `case_scrambles.json`. Not imported by the app.
+- `case_scrambles.json` — `{"scrambles": {case name: [scramble, ...]}}`, generated; safe to regenerate.
 - `cube_timer_gui.py` — customtkinter app. Imports the data layer from `cube_timer.py`. `CubeTimerApp` owns a sidebar and one frame per screen, shown and hidden with `grid()` / `grid_remove()`.
 - `cube_diagram.py` — sticker-level cube simulator and `CaseDiagram`, a plain `tk.Canvas` that draws a case. Depends only on tkinter.
 - `cube_times.db` — the user's recorded times. **User data: never delete, reset or overwrite it.** Tests that record times should use a temporary database path.
@@ -40,7 +43,13 @@ There is no test suite. `python cube_diagram.py` is the only automated check: ru
 
 **The practice selection is a shared set.** `CubeTimerApp.selections` maps `"oll"` / `"pll"` to a set of case names, loaded from the `selected_cases` table. The gallery (`CasesScreen`) mutates those sets in place and saves them; the trainers hold the same objects. Never rebind them to a new set. Screens with an `on_show()` method get it called from `show_screen`.
 
-**Setup scrambles.** `case_scramble(alg)` is the inverse algorithm with a random U turn before and after. On the practice screens the picture comes from `CaseDiagram.set_scramble`, so it matches the scrambled cube; the gallery uses `set_case(alg)`. The scramble is stored with each attempt in `times.scramble`.
+**Statuses.** `CubeTimerApp.statuses` maps mode to a `{case name: "learning" | "finished"}` dict (unlearned cases are absent), loaded from the `case_status` table and shared like the selection sets: mutate in place, never rebind. Both the gallery (status chip, click cycles) and the trainer (`status_seg`) write it.
+
+**Trainer sources.** `CaseTrainerScreen._source` is a key: `all`, `selected`, `slowest`, `status:<status>` or `group:<name>`; `_source_options()` gives (key, label) pairs and `_source_keys` maps labels back. *Slowest* uses `Database.recent_means` (mean of the last 5 per case). *Realistic* odds weight cases by `case_weight(alg)` in `cube_diagram.py`.
+
+**Scrambles.** The trainers call `setup_scramble(case)`: a random entry from `case_scrambles.json` plus a random U turn, falling back to `case_scramble(alg)` (inverse algorithm with random U turns) when the case has none. Generated scrambles are verified at creation by comparing facelet strings with the target; OLL targets include a random PLL. On the practice screens the picture comes from `CaseDiagram.set_scramble`, so it matches the scrambled cube; the gallery uses `set_case(alg)`. The scramble is stored with each attempt in `times.scramble`.
+
+**Some algorithms contain rotations** (e.g. V Perm has a `y`). A check that the cube is solved by comparing each sticker with its home position fails for those; compare colours relative to the centres (as `make_scrambles.facelets` does) instead.
 
 **Gallery clicks.** A click toggles selection and a double-click opens that case. Tk delivers the first click of a double-click as a normal click, so `_open` toggles the card back.
 

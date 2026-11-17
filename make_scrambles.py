@@ -8,8 +8,8 @@ each target position is built the way it arises in a solve (an OLL case comes
 with a random PLL still to do, every case at a random angle) and then solved
 with Kociemba's two-phase method. The reversed solution is the scramble.
 
-    python make_scrambles.py            # 8 scrambles per case
-    python make_scrambles.py 12         # 12 per case
+    python make_scrambles.py            # 10 scrambles per case
+    python make_scrambles.py 20         # 20 per case
 
 The first run builds lookup tables (about a minute) and caches them in the
 system temp folder. Needs only the standard library plus this project.
@@ -371,7 +371,7 @@ def _job(item):
 def main():
     from cube_timer import OLL_CASES, PLL_CASES
 
-    per_case = int(sys.argv[1]) if len(sys.argv) > 1 else 8
+    per_case = int(sys.argv[1]) if len(sys.argv) > 1 else 10
     rng = random.Random()
     pll_algs = [c["alg"] for c in PLL_CASES]
     jobs = []

@@ -307,6 +307,7 @@ class CaseTrainerScreen(TimerScreenBase):
         self._current_case = None
         self._scramble     = ""
         self._build_ui()
+        self._sync_pickers()
         self._pick_next_case()
         self._refresh_history()
 
@@ -616,18 +617,24 @@ class CaseTrainerScreen(TimerScreenBase):
 class CasesScreen(ctk.CTkFrame):
 
     COLUMNS   = 4
-    ADD_GROUP = "Add group…"
+    ADD_GROUP = "Add cases…"
 
-    def __init__(self, parent, root, db, selections, on_open_case, on_practise):
+    def __init__(self, parent, root, db, selections, statuses, on_open_case, on_practise):
         super().__init__(parent, fg_color="transparent")
         self.root          = root
         self.db            = db
         self.selections    = selections      # {"oll": set of names, "pll": set of names}
+        self.statuses      = statuses        # {"oll": {name: status}, "pll": {...}}
         self._on_open_case = on_open_case    # on_open_case(mode, case)
         self._on_practise  = on_practise     # on_practise(mode)
-        self._cards        = {}              # (mode, case name) -> (card, name label)
+        self._cards        = {}              # (mode, case name) -> (card, name label, status label)
         self._practise_btn = {}
         self._build_ui()
+
+    def on_show(self):
+        """Statuses can be changed on the practice screens too."""
+        self._refresh("oll")
+        self._refresh("pll")
 
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=1)
@@ -639,7 +646,8 @@ class CasesScreen(ctk.CTkFrame):
 
         ctk.CTkLabel(hdr, text="Case Gallery", font=ctk.CTkFont(size=20, weight="bold")).grid(
             row=0, column=0, sticky="w")
-        ctk.CTkLabel(hdr, text="Click to select or unselect  •  double-click to practise one case",
+        ctk.CTkLabel(hdr, text="Click to select  •  double-click to practise one case  •  "
+                               "click the status to change it",
                      font=ctk.CTkFont(size=12), text_color="gray55").grid(row=0, column=1)
 
         tabs = ctk.CTkTabview(self)
@@ -678,14 +686,20 @@ class CasesScreen(ctk.CTkFrame):
                       command=lambda: self._set(mode, [])).grid(row=0, column=1, padx=(0, 6))
 
         group_var = ctk.StringVar(value=self.ADD_GROUP)
+        status_items = {f"{s.title()} cases": s for s in STATUSES}
 
-        def add_group(group):
+        def add_group(item):
             group_var.set(self.ADD_GROUP)
-            self._set(mode, self.selections[mode]
-                      | {c["name"] for c in CASES[mode] if c["group"] == group})
+            if item in status_items:
+                statuses = self.statuses[mode]
+                names = {c["name"] for c in CASES[mode]
+                         if statuses.get(c["name"], "unlearned") == status_items[item]}
+            else:
+                names = {c["name"] for c in CASES[mode] if c["group"] == item}
+            self._set(mode, self.selections[mode] | names)
 
         ctk.CTkOptionMenu(bar, variable=group_var, width=150, height=30,
-                          values=sorted({c["group"] for c in CASES[mode]}),
+                          values=list(status_items) + sorted({c["group"] for c in CASES[mode]}),
                           command=add_group).grid(row=0, column=2)
 
         btn = ctk.CTkButton(bar, text="", width=190, height=30,
@@ -712,15 +726,32 @@ class CasesScreen(ctk.CTkFrame):
         alg = ctk.CTkLabel(card, text=case["alg"], wraplength=132, justify="center",
                            font=ctk.CTkFont(family="Courier New", size=11),
                            text_color="#ffcc00")
-        alg.grid(row=3, column=0, padx=8, pady=(2, 10))
+        alg.grid(row=3, column=0, padx=8, pady=(2, 4))
+
+        status = ctk.CTkLabel(card, text="", height=20, cursor="hand2",
+                              font=ctk.CTkFont(size=11, weight="bold"))
+        status.grid(row=4, column=0, pady=(0, 8))
+        status.bind("<Button-1>", lambda e, c=case: self._cycle_status(mode, c))
 
         for widget in (card, diagram, name, group, alg):
             widget.bind("<Button-1>", lambda e, c=case: self._toggle(mode, c))
             widget.bind("<Double-Button-1>", lambda e, c=case: self._open(mode, c))
-        self._cards[(mode, case["name"])] = (card, name)
+        self._cards[(mode, case["name"])] = (card, name, status)
         return card
 
     # ------------------------------------------------------------------
+    def _cycle_status(self, mode, case):
+        """Unlearned -> Learning -> Finished -> Unlearned."""
+        statuses = self.statuses[mode]
+        current = statuses.get(case["name"], "unlearned")
+        status = STATUSES[(STATUSES.index(current) + 1) % len(STATUSES)]
+        if status == "unlearned":
+            statuses.pop(case["name"], None)
+        else:
+            statuses[case["name"]] = status
+        self.db.set_status(mode, case["name"], status)
+        self._refresh(mode)
+
     def _toggle(self, mode, case):
         self._set(mode, self.selections[mode] ^ {case["name"]})
 
@@ -740,12 +771,16 @@ class CasesScreen(ctk.CTkFrame):
 
     def _refresh(self, mode):
         selection = self.selections[mode]
-        for (m, case_name), (card, name) in self._cards.items():
+        statuses = self.statuses[mode]
+        for (m, case_name), (card, name, status) in self._cards.items():
             if m != mode:
                 continue
             picked = case_name in selection
             card.configure(border_color=C_SELECTED if picked else C_PANEL)
             name.configure(text_color=C_SELECTED if picked else ("gray10", "#DCE4EE"))
+            s = statuses.get(case_name, "unlearned")
+            if status.cget("text") != s.upper():
+                status.configure(text=s.upper(), text_color=STATUS_COLOR[s])
         self._practise_btn[mode].configure(
             text=f"Practise selected ({len(selection)})",
             state="normal" if selection else "disabled")
@@ -950,15 +985,17 @@ class CubeTimerApp:
     def _build_screens(self):
         # Cases picked for practice; the gallery edits these sets, the trainers read them.
         self.selections = {mode: self.db.get_selected(mode) for mode in ("oll", "pll")}
+        # Learning / finished marks per case; shared the same way.
+        self.statuses = {mode: self.db.get_statuses(mode) for mode in ("oll", "pll")}
 
         self._screens = {
             "full":  FullSolveScreen(self.content, self.root, self.db),
-            "oll":   CaseTrainerScreen(self.content, self.root, self.db,
-                                       "oll", "OLL Practice", self.selections["oll"]),
-            "pll":   CaseTrainerScreen(self.content, self.root, self.db,
-                                       "pll", "PLL Practice", self.selections["pll"]),
+            "oll":   CaseTrainerScreen(self.content, self.root, self.db, "oll", "OLL Practice",
+                                       self.selections["oll"], self.statuses["oll"]),
+            "pll":   CaseTrainerScreen(self.content, self.root, self.db, "pll", "PLL Practice",
+                                       self.selections["pll"], self.statuses["pll"]),
             "cases": CasesScreen(self.content, self.root, self.db, self.selections,
-                                 self._open_case, self._practise_selected),
+                                 self.statuses, self._open_case, self._practise_selected),
             "stats": StatsScreen(self.content, self.root, self.db),
         }
         for screen in self._screens.values():

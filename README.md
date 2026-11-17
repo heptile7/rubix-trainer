@@ -29,20 +29,42 @@ python cube_timer.py         # terminal app
 | Page | What it does |
 | --- | --- |
 | Full Solve | Shows a 20-move scramble and times the solve. Displays last, best, ao5 and ao12. |
-| OLL Practice | Deals a random case with a setup scramble, its picture and its algorithm, and times it. Draw from all cases, your selected set, or one group; or pin a specific case. A history column lists recent attempts. |
+| OLL Practice | Deals a random case with a real scramble, its picture and (optionally) its algorithm, and times it. Draw from all cases, your selected set, your slowest cases, a learning status or one group; or pin a specific case. A history column lists recent attempts. |
 | PLL Practice | Same as OLL Practice, for the 21 PLL cases. |
-| Case Gallery | A picture of every OLL and PLL case with its name, group and algorithm. Click cases to build a practice set. |
+| Case Gallery | A picture of every OLL and PLL case with its name, group, algorithm and learning status. Click cases to build a practice set. |
 | Statistics | Recent full solves with rolling averages, and count / best / average for every OLL and PLL case. |
 
 **Space** starts the timer, stops it, then moves on to the next scramble or case. Each time is saved when the timer stops; **Delete Last** removes the most recent one.
 
 ### Practising a set of cases
 
-1. Open **Case Gallery** and click the cases you want; selected cases get a green border. **Select all**, **Clear** and **Add group…** change many at once. The selection is saved and is separate for OLL and PLL.
+1. Open **Case Gallery** and click the cases you want; selected cases get a green border. **Select all**, **Clear** and **Add cases…** (by group or by status) change many at once. The selection is saved and is separate for OLL and PLL.
 2. Press **Practise selected (n)**. The practice page switches to *From: Selected (n)* and deals random cases from that set, never the same one twice in a row.
-3. Apply the scramble to a solved cube held yellow on top, green in front, then time the algorithm. The cube ends up solved again (give or take a turn of the top layer), ready for the next scramble.
+3. Apply the scramble to a solved cube held yellow on top, green in front, then solve the case and stop the timer.
 
-Each scramble adds a random turn of the top layer before and after, so the case arrives at a random angle. On the practice pages the picture is drawn from the scramble, so it shows the cube exactly as it sits after scrambling; you may need to turn the top layer before the listed algorithm applies.
+**From** also offers:
+
+- **Slowest 10** — the ten cases with the slowest average over their last five times, taken from your selection (or all cases if nothing is selected).
+- **Unlearned / Learning / Finished** — every case with that status.
+- A group, such as *T-shape* or *Adj + Corners*.
+
+**Odds:** *Balanced* gives every case the same chance. *Realistic* deals them as often as they come up in real solves (e.g. H Perm 1/72, T Perm 1/18; OLL 20 1/216).
+
+**Statuses:** mark each case *Unlearned*, *Learning* or *Finished*, either with the **This case** buttons on the practice page or by clicking the status under a card in the gallery (it cycles). Statuses are saved.
+
+**Show algorithm** hides the algorithm so you have to recall it; the picture stays.
+
+### Scrambles
+
+Scrambles are real ones, like jperm.net's: short solver-made sequences of face turns (about 15 moves) that put the case on the cube without giving the algorithm away. OLL scrambles also leave a random PLL, as a real solve would. The case arrives at a random angle, so you may need to turn the top layer before the algorithm applies; the picture shows the cube exactly as it sits after scrambling.
+
+The scrambles are stored in `case_scrambles.json` (about ten per case, plus a random top-layer turn each time). To make a fresh set:
+
+```
+python make_scrambles.py        # 10 per case; pass a number for more, e.g. 20
+```
+
+It takes about a minute and a half. If the file is missing, the app falls back to reversing the algorithm.
 
 Double-click a case in the gallery to practise just that one. Every attempt is saved with its case and scramble. The **History** column shows the latest 40 attempts in that mode with their mean, and **Delete Last** removes the newest one.
 
@@ -59,7 +81,7 @@ Pick a mode from the menu. In a timing screen, press **Enter** to start, **Enter
 
 ## Data
 
-Times and your selected practice sets are stored in `cube_times.db`, created next to the scripts on first run. Both front ends read and write the same file. The terminal app does not use the selected sets or setup scrambles. Delete it to start over; copy it to back up your history.
+Times, your selected practice sets and case statuses are stored in `cube_times.db`, created next to the scripts on first run. Both front ends read and write the same file. The terminal app does not use the selected sets, statuses or scrambles. Delete it to start over; copy it to back up your history.
 
 Averages (ao5, ao12, …) drop the best and worst time of the most recent *n* and average the rest.
 
@@ -69,7 +91,9 @@ Averages (ao5, ao12, …) drop the best and worst time of the most recent *n* an
 | --- | --- |
 | `cube_timer.py` | OLL and PLL case lists, scramble generator, database, averages, and the terminal app. |
 | `cube_timer_gui.py` | The desktop app. |
-| `cube_diagram.py` | Cube simulator and the widget that draws case pictures. |
+| `cube_diagram.py` | Cube simulator, the widget that draws case pictures, and case frequencies. |
+| `make_scrambles.py` | Two-phase cube solver that generates `case_scrambles.json`. |
+| `case_scrambles.json` | Solver-made scrambles for every case. |
 | `requirements.txt` | Python dependencies. |
 
 ## Changing an algorithm
@@ -80,4 +104,4 @@ The algorithms live in `OLL_CASES` and `PLL_CASES` at the top of `cube_timer.py`
 python cube_diagram.py
 ```
 
-It prints `All OLL and PLL algorithms check out.` or lists the ones that are wrong.
+It prints `All OLL and PLL algorithms check out.` or lists the ones that are wrong. If you rename a case, run `python make_scrambles.py` again, since scrambles are stored by case name.
