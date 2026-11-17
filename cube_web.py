@@ -1,0 +1,356 @@
+#!/usr/bin/env python3
+"""
+Cube Timer - web front end.
+
+A small FastAPI server on localhost that serves the browser UI in web/ and a
+JSON API over the same data layer and database as the other front ends
+(cube_timer.py, cube_times.db). The browser does all the drawing; the server
+only reads and writes SQLite and makes scrambles.
+
+    python cube_web.py               # opens the app in the default browser
+    python cube_web.py --window      # own window instead (needs: pip install pywebview)
+    python cube_web.py --no-browser  # just serve (prints the address)
+
+Requirements: pip install fastapi uvicorn rich
+"""
+
+import argparse
+import json
+import logging
+import socket
+import threading
+import time
+import webbrowser
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from cube_diagram import case_diagram, case_weight, scramble_state, state_diagram
+from cube_timer import OLL_CASES, PLL_CASES, Database, setup_logging, setup_scramble
+
+log = logging.getLogger("cube_timer.web")
+
+ROOT     = Path(__file__).parent
+WEB_DIR  = ROOT / "web"
+DB_PATH  = ROOT / "cube_times.db"
+CASES    = {"oll": OLL_CASES, "pll": PLL_CASES}
+MODES    = ("full", "oll", "pll")
+STATUSES = ("unlearned", "learning", "finished")
+RECENT   = 40       # attempts shown in a trainer's History tab
+CASE_N   = 12       # times kept per case (result bar: last, best, ao5, ao12)
+
+
+# ---------------------------------------------------------------------------
+# Diagrams as JSON
+# ---------------------------------------------------------------------------
+def diagram_json(diagram):
+    """state_diagram() output in a compact JSON-friendly form."""
+    top, sides, arrows, perm = diagram
+    return {
+        "top":    [[x, z, c] for (x, z), c in top.items()],
+        "sides":  [[x, z, nx, nz, c] for (x, z, nx, nz), c in sides.items()],
+        "arrows": [[a[0], a[1], b[0], b[1], swap] for a, b, swap in arrows],
+        "perm":   perm,
+    }
+
+
+def _static_cases():
+    """Every case with its picture and realistic weight, worked out once."""
+    start = time.perf_counter()
+    out = {mode: [{"name": c["name"], "group": c["group"], "alg": c["alg"],
+                   "weight": case_weight(c["alg"]),
+                   "diagram": diagram_json(case_diagram(c["alg"]))}
+                  for c in cases]
+           for mode, cases in CASES.items()}
+    log.info("case pictures worked out in %.2fs", time.perf_counter() - start)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Request bodies
+# ---------------------------------------------------------------------------
+class Attempt(BaseModel):
+    mode: str
+    case: str | None = None
+    seconds: float
+    scramble: str | None = None
+
+
+class Names(BaseModel):
+    names: list[str]
+
+
+class StatusChange(BaseModel):
+    names: list[str]
+    status: str
+
+
+class ClientLog(BaseModel):
+    level: str = "error"
+    message: str
+
+
+# ---------------------------------------------------------------------------
+# App
+# ---------------------------------------------------------------------------
+def create_app(db_path=DB_PATH):
+    """
+    The web app over the database at db_path. Every endpoint is `async def`, so
+    they all run on the event-loop thread, which is also the thread that opens
+    the database (in lifespan): the one sqlite connection is never used from
+    two threads, and no locks are needed.
+    """
+    db    = None        # opened in lifespan
+    cases = _static_cases()
+    names = {m: {c["name"] for c in cs} for m, cs in CASES.items()}
+    by_name = {m: {c["name"]: c for c in cs} for m, cs in CASES.items()}
+
+    @asynccontextmanager
+    async def lifespan(app):
+        nonlocal db
+        db = app.state.db = Database(db_path)
+        yield
+        log.info("closing")
+        db.close()
+
+    app = FastAPI(title="Cube Timer", docs_url="/api/docs", redoc_url=None,
+                  openapi_url="/api/openapi.json", lifespan=lifespan)
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+    # --- helpers --------------------------------------------------------
+    def check_mode(mode, trainer=False):
+        if mode not in (CASES if trainer else MODES):
+            raise HTTPException(404, f"unknown mode {mode!r}")
+
+    def check_names(mode, given):
+        unknown = set(given) - names[mode]
+        if unknown:
+            raise HTTPException(400, f"unknown cases: {sorted(unknown)}")
+
+    def case_times(mode):
+        """{case name: its latest CASE_N times, newest first}, in one query."""
+        out = {}
+        for name, seconds in db.conn.execute(
+                "SELECT case_name,seconds FROM times WHERE mode=? AND case_name IS NOT NULL "
+                "ORDER BY rowid DESC", (mode,)):
+            times = out.setdefault(name, [])
+            if len(times) < CASE_N:
+                times.append(seconds)
+        return out
+
+    def recent(mode):
+        if mode == "full":
+            return [[None, s, ts] for s, ts in db.get("full", limit=CASE_N)]
+        return [list(r) for r in db.recent(mode, limit=RECENT)]
+
+    def user_state():
+        return {m: {"selected": sorted(db.get_selected(m)),
+                    "statuses": db.get_statuses(m),
+                    "custom":   {g: sorted(n) for g, n in db.get_custom_groups(m).items()}}
+                for m in CASES}
+
+    def bootstrap():
+        return {
+            "cases":      cases,
+            "state":      user_state(),
+            "recent":     {m: recent(m) for m in MODES},
+            "case_times": {m: case_times(m) for m in CASES},
+        }
+
+    def times_after_change(mode, case):
+        """What a screen needs to repaint after an attempt is added or removed."""
+        out = {"recent": recent(mode)}
+        if case:
+            out["case_times"] = [s for s, _ in db.get(mode, case, CASE_N)]
+        return out
+
+    # --- page -----------------------------------------------------------
+    # index.html carries the bootstrap data inline, so the first paint needs no
+    # second round trip. The template is re-read only when the file changes.
+    template = {"mtime": None, "text": ""}
+
+    @app.get("/", response_class=HTMLResponse)
+    async def index():
+        path = WEB_DIR / "index.html"
+        mtime = path.stat().st_mtime
+        if template["mtime"] != mtime:
+            template.update(mtime=mtime, text=path.read_text(encoding="utf-8"))
+        data = json.dumps(bootstrap(), separators=(",", ":")).replace("</", "<\\/")
+        html = template["text"].replace("<!--BOOT-->", data)
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+    # --- API ------------------------------------------------------------
+    @app.get("/api/bootstrap")
+    async def get_bootstrap():
+        return bootstrap()
+
+    @app.get("/api/state")
+    async def get_state():
+        return user_state()
+
+    @app.get("/api/deal/{mode}/{case}")
+    async def deal(mode: str, case: str):
+        """A setup scramble for the case and a picture of the cube it leaves."""
+        check_mode(mode, trainer=True)
+        if case not in by_name[mode]:
+            raise HTTPException(404, f"unknown case {case!r}")
+        scramble = setup_scramble(by_name[mode][case])
+        return {"case": case, "scramble": scramble,
+                "diagram": diagram_json(state_diagram(scramble_state(scramble)))}
+
+    @app.post("/api/times")
+    async def add_time(a: Attempt):
+        check_mode(a.mode)
+        if a.mode != "full":
+            check_names(a.mode, [a.case])
+        if not 0 < a.seconds < 24 * 3600:
+            raise HTTPException(400, "time out of range")
+        db.add(a.mode, a.seconds, case_name=a.case if a.mode != "full" else None,
+               scramble=a.scramble)
+        log.info("%s attempt: %s %.2f", a.mode, a.case or "-", a.seconds)
+        return times_after_change(a.mode, a.case)
+
+    @app.delete("/api/times/last/{mode}")
+    async def delete_last(mode: str):
+        """Remove the newest attempt in a mode (the top row of the history)."""
+        check_mode(mode)
+        row = db.conn.execute("SELECT case_name FROM times WHERE mode=? "
+                              "ORDER BY rowid DESC LIMIT 1", (mode,)).fetchone()
+        if not row or not db.delete_last(mode):
+            return {"deleted": False, **times_after_change(mode, None)}
+        return {"deleted": True, "case": row[0], **times_after_change(mode, row[0])}
+
+    @app.get("/api/times/{mode}")
+    async def get_times(mode: str, limit: int = 50):
+        check_mode(mode)
+        return [[s, ts] for s, ts in db.get(mode, limit=max(1, min(limit, 1000)))]
+
+    @app.get("/api/summary/{mode}")
+    async def summary(mode: str):
+        check_mode(mode, trainer=True)
+        return {name: [n, best, avg] for name, n, best, avg in db.case_summary(mode)}
+
+    @app.put("/api/selected/{mode}")
+    async def put_selected(mode: str, body: Names):
+        check_mode(mode, trainer=True)
+        check_names(mode, body.names)
+        db.set_selected(mode, set(body.names))
+        log.debug("%s selection now %d cases", mode, len(body.names))
+        return {"ok": True}
+
+    @app.put("/api/status/{mode}")
+    async def put_status(mode: str, body: StatusChange):
+        check_mode(mode, trainer=True)
+        check_names(mode, body.names)
+        if body.status not in STATUSES:
+            raise HTTPException(400, f"unknown status {body.status!r}")
+        db.set_statuses(mode, body.names, body.status)
+        log.info("%s: marked %d cases %s", mode, len(body.names), body.status)
+        return {"ok": True}
+
+    @app.put("/api/groups/{mode}/{name}")
+    async def put_group(mode: str, name: str, body: Names):
+        check_mode(mode, trainer=True)
+        check_names(mode, body.names)
+        name = name.strip()[:30]
+        if not name:
+            raise HTTPException(400, "empty group name")
+        db.save_custom_group(mode, name, body.names)
+        log.info("%s group %r saved with %d cases", mode, name, len(body.names))
+        return {"ok": True}
+
+    @app.delete("/api/groups/{mode}/{name}")
+    async def delete_group(mode: str, name: str):
+        check_mode(mode, trainer=True)
+        db.delete_custom_group(mode, name)
+        log.info("%s group %r deleted", mode, name)
+        return {"ok": True}
+
+    @app.post("/api/log")
+    async def client_log(entry: ClientLog):
+        level = logging.ERROR if entry.level == "error" else logging.INFO
+        logging.getLogger("cube_timer.browser").log(level, "%s", entry.message[:4000])
+        return {"ok": True}
+
+    @app.exception_handler(Exception)
+    async def on_error(request: Request, exc: Exception):
+        log.error("Error in %s %s", request.method, request.url.path, exc_info=exc)
+        return JSONResponse({"detail": "server error"}, status_code=500)
+
+    # Static files (ETag + Last-Modified; no-cache makes the browser revalidate,
+    # so a reload is a cheap 304 and an edited file is never served stale).
+    @app.middleware("http")
+    async def revalidate(request: Request, call_next):
+        response = await call_next(request)
+        if not request.url.path.startswith("/api/"):
+            response.headers.setdefault("Cache-Control", "no-cache")
+        return response
+
+    app.mount("/", StaticFiles(directory=WEB_DIR), name="web")
+    return app
+
+
+# ---------------------------------------------------------------------------
+def _free_port(start=8765, tries=40):
+    for port in range(start, start + tries):
+        with socket.socket() as s:
+            try:
+                s.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    raise SystemExit("no free port found")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Cube Timer web app")
+    parser.add_argument("--port", type=int, default=None)
+    parser.add_argument("--no-browser", action="store_true", help="don't open a browser")
+    parser.add_argument("--window", action="store_true",
+                        help="open in its own window (needs pywebview)")
+    args = parser.parse_args()
+
+    setup_logging()
+    import uvicorn
+
+    start = time.perf_counter()
+    port = args.port or _free_port()
+    url = f"http://127.0.0.1:{port}/"
+    server = uvicorn.Server(uvicorn.Config(create_app(), host="127.0.0.1", port=port,
+                                           log_level="warning"))
+
+    def when_up(fn):
+        def wait():
+            while not server.started:
+                time.sleep(0.02)
+            log.info("serving %s (ready in %.2fs)", url, time.perf_counter() - start)
+            fn()
+        threading.Thread(target=wait, daemon=True).start()
+
+    if args.window:
+        try:
+            import webview
+        except ImportError:
+            raise SystemExit("--window needs pywebview:  pip install pywebview")
+        thread = threading.Thread(target=server.run, daemon=True)
+        thread.start()
+        while not server.started:
+            time.sleep(0.02)
+        webview.create_window("Cube Timer", url, width=1180, height=760, min_size=(980, 640))
+        webview.start()
+        server.should_exit = True
+        thread.join(timeout=5)
+        return
+
+    print(f"Cube Timer at {url}  (Ctrl+C to stop)", flush=True)
+    when_up((lambda: None) if args.no_browser else (lambda: webbrowser.open(url)))
+    server.run()
+
+
+if __name__ == "__main__":
+    main()

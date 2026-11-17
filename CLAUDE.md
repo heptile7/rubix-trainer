@@ -4,19 +4,20 @@ Guidance for Claude Code when working in this project.
 
 ## What this is
 
-A Rubik's Cube practice timer in Python: full solves plus OLL (57 cases) and PLL (21 cases) drills, with times stored in SQLite. Two front ends share one data layer. Runs on Windows; no build step, no package structure, no git repository.
+A Rubik's Cube practice timer in Python: full solves plus OLL (57 cases) and PLL (21 cases) drills, with times stored in SQLite. Three front ends share one data layer: a web app (FastAPI + plain JS), a customtkinter GUI and a terminal app. Runs on Windows; no build step, no package structure, no git repository.
 
 ## Commands
 
 ```
-pip install -r requirements.txt   # rich, customtkinter
+pip install -r requirements.txt   # rich, customtkinter, fastapi, uvicorn
+python cube_web.py                # web app (opens the browser; --no-browser, --port N, --window)
 python cube_timer_gui.py          # GUI
 python cube_timer.py              # terminal app (interactive, blocks on input)
 python cube_diagram.py            # validate every OLL/PLL algorithm
 python make_scrambles.py [n]      # regenerate case_scrambles.json (n per case, default 10; ~90 s)
 ```
 
-There is no test suite. `python cube_diagram.py` is the only automated check: run it after touching any algorithm or the simulator. It must print `All OLL and PLL algorithms check out.`
+There is no test suite. `python cube_diagram.py` is the only check that runs automatically: run it after touching any algorithm or the simulator. It must print `All OLL and PLL algorithms check out.`
 
 **Post-turn hook.** `.claude/settings.json` registers a Stop hook, `.claude/hooks/post_turn.py`, which runs after every turn:
 - removes stray `pytest-cache-files-*` folders;
@@ -31,6 +32,8 @@ A failed check or stale docs returns `{"decision": "block"}`, so the turn contin
 - `make_scrambles.py` — standalone pure-Python Kociemba two-phase solver (cubie model, move/pruning tables cached as a pickle in the system temp folder) that writes `case_scrambles.json`. Not imported by the app.
 - `case_scrambles.json` — `{"scrambles": {case name: [scramble, ...]}}`, generated; safe to regenerate.
 - `cube_timer_gui.py` — customtkinter app. Imports the data layer from `cube_timer.py`. `CubeTimerApp` owns a sidebar and one frame per screen, shown and hidden with `grid()` / `grid_remove()`.
+- `cube_web.py` — FastAPI server for the web app. `create_app(db_path)` builds it (tests pass a temporary database path); `main()` runs uvicorn on 127.0.0.1 from port 8765 up.
+- `web/` — the web page: `index.html`, `style.css`, `js/*.js` ES modules. No framework, no build step, no npm (Node here is 16).
 - `cube_diagram.py` — sticker-level cube simulator and `CaseDiagram`, a plain `tk.Canvas` that draws a case. Depends only on tkinter.
 - `cube_times.db` — the user's recorded times. **User data: never delete, reset or overwrite it.** Tests that record times should use a temporary database path.
 
@@ -52,7 +55,7 @@ A failed check or stale docs returns `{"decision": "block"}`, so the turn contin
 
 **Keep repaints cheap.** Reconfiguring customtkinter widgets is slow. The picker and gallery remember what each tile last showed (`_painted`) and touch only tiles that changed. Picker tiles and Statistics cells are plain `tk` widgets (customtkinter versions made pages take seconds to open), so they need explicit colours and fonts and `_px` scaling.
 
-**Logging.** `setup_logging()` (called from `main()` only, so scripted tests do not write the log) sends the `cube_timer.*` loggers to a rotating `cube_timer.log`, at INFO, or DEBUG with `CUBE_TIMER_DEBUG=1`. Uncaught errors, including ones inside Tk callbacks (`report_callback_exception`), are logged. Log user-visible state changes at INFO and per-click noise at DEBUG.
+**Logging.** `setup_logging()` in `cube_timer.py` (called from the GUI's and the web app's `main()` only, so scripted tests do not write the log) sends the `cube_timer.*` loggers to a rotating `cube_timer.log`, at INFO, or DEBUG with `CUBE_TIMER_DEBUG=1`. Uncaught errors, including ones inside Tk callbacks (`report_callback_exception`), are logged. Log user-visible state changes at INFO and per-click noise at DEBUG.
 
 **Selection and statuses go through `SelectionStore`.** `CubeTimerApp.store` holds `selected[mode]` (set of case names, table `selected_cases`) and `statuses[mode]` (`{name: "learning" | "finished"}`; unlearned cases are absent, table `case_status`). It also holds `custom[mode]` (`{group name: set of case names}`, table `custom_groups`, the user's saved groups). Change all of these only through its methods: `set`, `toggle`, `toggle_group`, `set_status`, `mark_selected` (bulk status for the selection), `save_group`, `delete_group`, `load_group`. A loaded group becomes `active[mode]`. From then on the selection is a working copy, and the group changes only via `save_active`; `pending_changes`, `revert_active` and `close_active` complete the edit cycle shown in `MyGroups`' edit bar. Each saves to the database and calls every `store.listen(fn)` listener with the mode, which is how the gallery, both trainers' pickers, the toolbars and the From counts stay in sync. The sets are mutated in place, never rebound. Screens with an `on_show()` method also get it called from `show_screen`.
 
@@ -83,3 +86,30 @@ The From menu also lists custom groups as `custom:<name>` sources.
 ## Verifying GUI changes
 
 The GUI can be driven without user input: build `CubeTimerApp()`, call `app.show_screen(name)` and `app.root.update()` in a loop, then `app._on_close()`. When the test records times or changes the selection, first point `cube_timer_gui.Database` at a temporary copy of the database. Pillow is not available for screenshots; capturing the window region with PowerShell's `System.Drawing` `CopyFromScreen` works.
+
+## Web app
+
+**Server (`cube_web.py`).** It reuses the data layer and the simulator unchanged. Points to know:
+- **Threads.** Every endpoint is `async def`, so all run on the event-loop thread. The `Database` is opened in the lifespan handler on that same thread, because sqlite connections can't cross threads. Don't add sync (`def`) endpoints that touch `db`.
+- **Bootstrap.** `GET /` inlines the bootstrap JSON into `index.html` at `<!--BOOT-->`. That JSON holds the cases with pictures (`diagram_json`) and weights, the selection, statuses and groups, recent attempts, and the last 12 times per case, so the first paint needs no extra request.
+- **Pictures.** Case pictures are computed once in `create_app` (about 0.4 s).
+- **Endpoints:** `/api/deal/{mode}/{case}` (setup scramble and its picture), `/api/times`, `/api/times/last/{mode}`, `/api/times/{mode}`, `/api/summary/{mode}`, `/api/selected/{mode}`, `/api/status/{mode}`, `/api/groups/{mode}/{name}`, `/api/state`, `/api/log`. The docs are at `/api/docs`.
+- **Static files** are served with ETags and `no-cache`, so edits show up on reload.
+
+**Client (`web/js`).**
+- `store.js` ports `SelectionStore`, with the same methods in camelCase. It changes memory first, then saves through `api.js`, which queues writes so they keep their order. If a write fails, the client reloads `/api/state`.
+- `diagram.js` ports `CaseDiagram._draw` to SVG on a 100-unit viewBox. Keep the two in step when changing how pictures look.
+- `util.js` ports `fmt`, `calc_ao` and `generate_scramble`. Full Solve scrambles are made in the browser.
+- `timer.js` is the idle → running → stopped machine.
+- Screens: `full.js`, `trainer.js` (OLL and PLL), `gallery.js`, `stats.js`. Shared widgets (`selectionTools`, `myGroups`, `groupHeader`, `casePicker`) are in `widgets.js`.
+
+**Rules for speed:**
+- Build DOM once; on store changes only flip classes and text. Use one delegated listener per list, not one per tile.
+- `app.js` builds the opened screen first and the others in `requestIdleCallback`. Screens are shown and hidden with the `.shown` class.
+- The trainer picks the next case and fetches its scramble (`prepareNext`) as soon as the current one is shown. `pickNextCase` reuses that prefetch while the source, pin and odds are unchanged and the case is still in the pool.
+
+**Clicks.** A browser sends click, click, dblclick. Tiles and cards ignore the second click (`e.detail > 1`), and the dblclick handler undoes the first click's toggle, as in the Tk app.
+
+**Space** is handled on `keydown`, using `e.timeStamp`, and its default action is prevented so a focused button isn't pressed. A `<select>` is blurred after a change so it doesn't keep focus and take the next Space press.
+
+**Testing the web app.** `fastapi.testclient.TestClient(create_app(tmp_db))` covers the API. Inside `with TestClient(...)` the lifespan runs and the database opens. For the page, run `uvicorn.Server` on `create_app(tmp_db)` in a thread and drive it with Playwright using `channel="chrome"`, the installed Chrome. `httpx` and `playwright` are test-only and not in requirements. `window.cubeApp` exposes `store`, `screens`, `show` and `timings`, and each trainer screen has a `state` getter (`source`, `pinned`, `current`, `scramble`).

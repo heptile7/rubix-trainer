@@ -8,13 +8,11 @@ Requirements: pip install customtkinter rich
 """
 
 import logging
-import os
 import random
 import sys
 import time
 import tkinter as tk
 import traceback
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from tkinter import messagebox
 
@@ -27,6 +25,7 @@ from cube_timer import (
     calc_ao,
     fmt,
     generate_scramble,
+    setup_logging,
     setup_scramble,
 )
 from cube_diagram import CaseDiagram, case_weight
@@ -47,27 +46,7 @@ SIDE_WIDTH = 262             # practice pages' right-hand column (picker / histo
 STATUSES = ["unlearned", "learning", "finished"]
 STATUS_COLOR = {"unlearned": "gray50", "learning": "#ff9f1c", "finished": "#3fa7ff"}
 
-LOG_FILE = Path(__file__).with_name("cube_timer.log")
 log = logging.getLogger("cube_timer.gui")
-
-
-def setup_logging():
-    """
-    Log to cube_timer.log next to the scripts (rotated at 512 KB, 2 old files
-    kept). INFO by default; set CUBE_TIMER_DEBUG=1 for every selection change.
-    Uncaught errors, including ones inside Tk callbacks, are logged too.
-    """
-    handler = RotatingFileHandler(LOG_FILE, maxBytes=512_000, backupCount=2, encoding="utf-8")
-    handler.setFormatter(logging.Formatter(
-        "%(asctime)s %(levelname)-7s %(name)s: %(message)s", "%Y-%m-%d %H:%M:%S"))
-    root = logging.getLogger()
-    root.addHandler(handler)
-    root.setLevel(logging.DEBUG if os.environ.get("CUBE_TIMER_DEBUG") else logging.INFO)
-
-    def excepthook(exc_type, exc, tb):
-        log.critical("Uncaught error", exc_info=(exc_type, exc, tb))
-        sys.__excepthook__(exc_type, exc, tb)
-    sys.excepthook = excepthook
 
 
 def _px(widget, size):

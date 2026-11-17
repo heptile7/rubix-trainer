@@ -2,9 +2,10 @@
 
 A Rubik's Cube practice timer for full solves and last-layer drills. It covers all 57 OLL cases and all 21 PLL cases, shows a picture of each case, and keeps every time in a local SQLite database so you can track progress.
 
-There are two front ends that share the same data:
+There are three front ends that share the same data:
 
-- **GUI** (`cube_timer_gui.py`) — a dark-themed desktop window.
+- **Web app** (`cube_web.py`) — runs in your browser. The fastest one: every page opens instantly.
+- **GUI** (`cube_timer_gui.py`) — the original desktop window (customtkinter). Same features as the web app.
 - **CLI** (`cube_timer.py`) — a terminal version.
 
 ## Setup
@@ -15,16 +16,34 @@ Requires Python 3 (developed on 3.11) with Tk, which ships with the standard Win
 pip install -r requirements.txt
 ```
 
-This installs `rich` (terminal output) and `customtkinter` (GUI).
+This installs `rich` (terminal output), `customtkinter` (GUI), and `fastapi` with `uvicorn` (web app).
 
 ## Running
 
 ```
+python cube_web.py           # web app: opens in your default browser
 python cube_timer_gui.py     # desktop app
 python cube_timer.py         # terminal app
 ```
 
-## GUI
+The web app runs a small server on your own computer (`http://127.0.0.1:8765/`, or the next free port) and opens the page. Stop it with **Ctrl+C** in its terminal. Options:
+
+- `--no-browser`: just start the server and print its address.
+- `--port N`: use a particular port.
+- `--window`: open the app in its own window instead of a browser tab. This needs `pip install pywebview`.
+
+### Web app or desktop app?
+
+They have the same pages and features and use the same database. Use one at a time: each keeps your selection and groups in memory while it runs.
+
+The web app is much faster. Its pages are built in a few milliseconds, against 0.2–2.6 s in the desktop app, and switching pages takes one frame. Moving to the next case is instant, because the next scramble is fetched while you solve. Case pictures stay sharp at any size, and the layout adapts to any window width, down to a phone.
+
+Two small differences in the web app:
+
+- The timer starts the moment **Space** goes down, using the key press's own timestamp.
+- **Save as group…** and the delete and discard confirmations use the browser's own dialogs.
+
+## Web app and GUI
 
 | Page | What it does |
 | --- | --- |
@@ -95,7 +114,7 @@ Pick a mode from the menu. In a timing screen, press **Enter** to start, **Enter
 
 Times, your selected practice sets, case statuses and your own groups are stored in `cube_times.db`, created next to the scripts on first run. Both front ends read and write the same file. The terminal app does not use the selected sets, statuses or scrambles. Delete it to start over; copy it to back up your history.
 
-The app writes a log to `cube_timer.log` (next to the scripts, rotated at 512 KB): startup time, each saved attempt, status and group changes, and any errors. Set the environment variable `CUBE_TIMER_DEBUG=1` before starting it to also log every selection change. The log is not committed to git.
+The apps write a log to `cube_timer.log` (next to the scripts, rotated at 512 KB): startup time, each saved attempt, status and group changes, and any errors (for the web app, also errors in the browser page). Set the environment variable `CUBE_TIMER_DEBUG=1` before starting it to also log every selection change. The log is not committed to git.
 
 Averages (ao5, ao12, …) drop the best and worst time of the most recent *n* and average the rest.
 
@@ -105,6 +124,8 @@ Averages (ao5, ao12, …) drop the best and worst time of the most recent *n* an
 | --- | --- |
 | `cube_timer.py` | OLL and PLL case lists, scramble generator, database, averages, and the terminal app. |
 | `cube_timer_gui.py` | The desktop app. |
+| `cube_web.py` | The web app's server: serves `web/` and a JSON API over the database. |
+| `web/` | The web app's page: `index.html`, `style.css` and plain JavaScript modules in `web/js/` (no build step). |
 | `cube_diagram.py` | Cube simulator, the widget that draws case pictures, and case frequencies. |
 | `make_scrambles.py` | Two-phase cube solver that generates `case_scrambles.json`. |
 | `case_scrambles.json` | Solver-made scrambles for every case. |
