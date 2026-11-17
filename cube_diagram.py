@@ -230,7 +230,17 @@ class CaseDiagram(tk.Canvas):
         """Show the top layer exactly as it looks after applying a scramble."""
         self._draw(state_diagram(scramble_state(scramble)))
 
+    def resize(self, size):
+        """Change the picture's size and redraw it."""
+        if size == self._size:
+            return
+        self._size = size
+        self.configure(width=size, height=size)
+        if getattr(self, "_diagram", None):
+            self._draw(self._diagram)
+
     def _draw(self, diagram):
+        self._diagram = diagram
         self.delete("all")
         top, sides, arrows, permutation_only = diagram
 

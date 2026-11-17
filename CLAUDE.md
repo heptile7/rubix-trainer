@@ -18,6 +18,13 @@ python make_scrambles.py [n]      # regenerate case_scrambles.json (n per case, 
 
 There is no test suite. `python cube_diagram.py` is the only automated check: run it after touching any algorithm or the simulator. It must print `All OLL and PLL algorithms check out.`
 
+**Post-turn hook.** `.claude/settings.json` registers a Stop hook, `.claude/hooks/post_turn.py`, which runs after every turn:
+- removes stray `pytest-cache-files-*` folders;
+- byte-compiles every script and runs `cube_diagram.py`, when a `.py` file changed;
+- asks once per change for README.md / CLAUDE.md to be updated, when code is newer than them.
+
+A failed check or stale docs returns `{"decision": "block"}`, so the turn continues. It never blocks twice in a row. Runs are logged to `.claude/hook.log`, and state is kept in `.claude/hook_state.json`; both are git-ignored. If it asks for docs and nothing user- or maintainer-facing changed, say so; it will not ask again for that change.
+
 ## Layout
 
 - `cube_timer.py` — the data layer and the CLI in one file: `OLL_CASES`, `PLL_CASES`, `generate_scramble`, `invert_alg`, `case_scramble`, `setup_scramble`, `fmt`, `calc_ao`, `Database`, then the `rich`-based terminal modes.
@@ -41,17 +48,33 @@ There is no test suite. `python cube_diagram.py` is the only automated check: ru
 
 **Timer screens share a base class.** `FullSolveScreen` and `CaseTrainerScreen` extend `TimerScreenBase`, which runs the idle → running → stopped state machine and builds the case panel (`_build_case_panel`). Subclasses supply `timer_label`, `start_btn`, `_next()` and `_save_result()`. One `CaseTrainerScreen` class serves both OLL and PLL practice, parametrised by mode.
 
-**The practice selection is a shared set.** `CubeTimerApp.selections` maps `"oll"` / `"pll"` to a set of case names, loaded from the `selected_cases` table. The gallery (`CasesScreen`) mutates those sets in place and saves them; the trainers hold the same objects. Never rebind them to a new set. Screens with an `on_show()` method get it called from `show_screen`.
+**Screens are built lazily.** `CubeTimerApp.screen(name)` builds a screen on first use from `_factories`; only Full Solve exists at startup (about 0.6 s, against 5 s when everything was built up front). Use `app.screen(name)`, not `app._screens[name]`, for a screen that may not exist yet. Store listeners skip hidden screens (`winfo_ismapped()`), which repaint in `on_show`.
 
-**Statuses.** `CubeTimerApp.statuses` maps mode to a `{case name: "learning" | "finished"}` dict (unlearned cases are absent), loaded from the `case_status` table and shared like the selection sets: mutate in place, never rebind. Both the gallery (status chip, click cycles) and the trainer (`status_seg`) write it.
+**Keep repaints cheap.** Reconfiguring customtkinter widgets is slow. The picker and gallery remember what each tile last showed (`_painted`) and touch only tiles that changed. Picker tiles and Statistics cells are plain `tk` widgets (customtkinter versions made pages take seconds to open), so they need explicit colours and fonts and `_px` scaling.
 
-**Trainer sources.** `CaseTrainerScreen._source` is a key: `all`, `selected`, `slowest`, `status:<status>` or `group:<name>`; `_source_options()` gives (key, label) pairs and `_source_keys` maps labels back. *Slowest* uses `Database.recent_means` (mean of the last 5 per case). *Realistic* odds weight cases by `case_weight(alg)` in `cube_diagram.py`.
+**Logging.** `setup_logging()` (called from `main()` only, so scripted tests do not write the log) sends the `cube_timer.*` loggers to a rotating `cube_timer.log`, at INFO, or DEBUG with `CUBE_TIMER_DEBUG=1`. Uncaught errors, including ones inside Tk callbacks (`report_callback_exception`), are logged. Log user-visible state changes at INFO and per-click noise at DEBUG.
+
+**Selection and statuses go through `SelectionStore`.** `CubeTimerApp.store` holds `selected[mode]` (set of case names, table `selected_cases`) and `statuses[mode]` (`{name: "learning" | "finished"}`; unlearned cases are absent, table `case_status`). It also holds `custom[mode]` (`{group name: set of case names}`, table `custom_groups`, the user's saved groups). Change all of these only through its methods: `set`, `toggle`, `toggle_group`, `set_status`, `mark_selected` (bulk status for the selection), `save_group`, `delete_group`, `load_group`. A loaded group becomes `active[mode]`. From then on the selection is a working copy, and the group changes only via `save_active`; `pending_changes`, `revert_active` and `close_active` complete the edit cycle shown in `MyGroups`' edit bar. Each saves to the database and calls every `store.listen(fn)` listener with the mode, which is how the gallery, both trainers' pickers, the toolbars and the From counts stay in sync. The sets are mutated in place, never rebound. Screens with an `on_show()` method also get it called from `show_screen`.
+
+**Selection widgets.**
+- `SelectionTools`: All / None / Slowest 10, "Mark selected as" status buttons, Save as group… and the count. `compact=True` stacks it for the side column. `ask_name` can be replaced in tests.
+- `MyGroups`: saved-group chips; click loads, ✕ deletes after `confirm`, which can be replaced in tests.
+- `GroupHeader`: `Dot (3/8)` plus a ☑/☐/◩ group tick and an optional fold arrow.
+- `CasePicker`: scrollable mini `CaseDiagram` tiles per group, with `MyGroups` on top.
+
+These are shared by the trainer's side column and the gallery, and groups appear in case-list order (`group_order`). The trainer's side column (min `SIDE_WIDTH`, grid weight 2 against the main column's 3) has Cases / History tabs.
+
+**Layouts follow the window.** `CasePicker._reflow` and `CasesScreen._layout` re-grid on `<Configure>` of the scroll frame's `_parent_canvas`, debounced with `after(120)`: more tiles or columns per row, and picker tiles resized with `CaseDiagram.resize`. When changing a grid's column count, reset the weight/uniform of columns that are no longer used, or they keep taking space.
+
+The From menu also lists custom groups as `custom:<name>` sources.
+
+**Trainer sources and pinning.** `CaseTrainerScreen._source` is a key: `all`, `selected`, `slowest`, `status:<status>` or `group:<name>`. `_source_options()` gives (key, label) pairs and `_source_keys` maps labels back. Editing the set from the trainer (tile click, group tick, tools) switches the source to `selected` via `_on_set_edited`. `_pinned` (a case, or None) overrides random dealing: it is set by double-click (`_pin`, which undoes the first click's toggle and restores the previous source) or by `select_case` from the gallery, and cleared by `unpin` or by changing the source. *Slowest* uses `Database.recent_means` (mean of the last 5 per case). *Realistic* odds weight cases by `case_weight(alg)` in `cube_diagram.py`.
 
 **Scrambles.** The trainers call `setup_scramble(case)`: a random entry from `case_scrambles.json` plus a random U turn, falling back to `case_scramble(alg)` (inverse algorithm with random U turns) when the case has none. Generated scrambles are verified at creation by comparing facelet strings with the target; OLL targets include a random PLL. On the practice screens the picture comes from `CaseDiagram.set_scramble`, so it matches the scrambled cube; the gallery uses `set_case(alg)`. The scramble is stored with each attempt in `times.scramble`.
 
 **Some algorithms contain rotations** (e.g. V Perm has a `y`). A check that the cube is solved by comparing each sticker with its home position fails for those; compare colours relative to the centres (as `make_scrambles.facelets` does) instead.
 
-**Gallery clicks.** A click toggles selection and a double-click opens that case. Tk delivers the first click of a double-click as a normal click, so `_open` toggles the card back.
+**Clicks on cases.** In the gallery and the picker, a click toggles selection and a double-click pins/opens that case. Tk delivers the first click of a double-click as a normal click, so `_open` / `_pin` toggle the case back. In scripted tests, `event_generate('<Double-Button-1>')` is not allowed, so call the handler directly. Bindings on a CTkLabel sit on its inner `_label`, so generate events on that.
 
 **Plain canvases need manual handling inside customtkinter.** `CaseDiagram` is not scaled by customtkinter, so size it with `_px(widget, size)`, and give it an explicit background matching its parent (`C_PANEL`).
 

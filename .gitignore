@@ -1,3 +1,9 @@
 __pycache__/
 *.pyc
 pytest-cache-files-*/
+
+# app log (see setup_logging in cube_timer_gui.py) and Claude Code hook log
+cube_timer.log*
+.claude/hook.log
+.claude/hook_state.json
+.claude/settings.local.json

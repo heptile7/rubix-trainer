@@ -29,18 +29,28 @@ python cube_timer.py         # terminal app
 | Page | What it does |
 | --- | --- |
 | Full Solve | Shows a 20-move scramble and times the solve. Displays last, best, ao5 and ao12. |
-| OLL Practice | Deals a random case with a real scramble, its picture and (optionally) its algorithm, and times it. Draw from all cases, your selected set, your slowest cases, a learning status or one group; or pin a specific case. A history column lists recent attempts. |
+| OLL Practice | Deals a random case with a real scramble, its picture and (optionally) its algorithm, and times it. Draw from all cases, your selected set, your slowest cases, a learning status or one group; or pin a specific case. The right-hand column switches between a **case picker** (mini pictures to build your set) and your **history**. |
 | PLL Practice | Same as OLL Practice, for the 21 PLL cases. |
-| Case Gallery | A picture of every OLL and PLL case with its name, group, algorithm and learning status. Click cases to build a practice set. |
+| Case Gallery | A large picture of every OLL and PLL case, grouped by shape, with its name, algorithm and learning status. Click cases to build a practice set. |
 | Statistics | Recent full solves with rolling averages, and count / best / average for every OLL and PLL case. |
 
 **Space** starts the timer, stops it, then moves on to the next scramble or case. Each time is saved when the timer stops; **Delete Last** removes the most recent one.
 
 ### Practising a set of cases
 
-1. Open **Case Gallery** and click the cases you want; selected cases get a green border. **Select all**, **Clear** and **Add cases…** (by group or by status) change many at once. The selection is saved and is separate for OLL and PLL.
-2. Press **Practise selected (n)**. The practice page switches to *From: Selected (n)* and deals random cases from that set, never the same one twice in a row.
-3. Apply the scramble to a solved cube held yellow on top, green in front, then solve the case and stop the timer.
+You can build the set right on the practice page, in the **Cases** tab of the right-hand column, or in the **Case Gallery** with bigger pictures. Both show the same selection, which is saved and separate for OLL and PLL.
+
+1. Click case pictures to select or unselect them; selected cases get a green border. Cases are grouped by shape, and each group header shows how many are picked (`Dot (3/8)`). The box at its right selects or clears the whole group (☑ all, ☐ none, half-filled for some). On the practice page, click a group name to fold it away.
+2. The buttons above change many at once: **All**, **None** and **Slowest 10** (your 10 slowest cases by recent average). **Mark selected as: Unlearned / Learning / Finished** gives every selected case that status in one go.
+3. **Save as group…** names the current selection and keeps it under **My groups** (in the picker and the gallery). Groups also appear in the **From** menu as ★ entries, so you can practise one directly. ✕ deletes a group (the cases themselves are kept).
+
+   **Editing a group:** click it to open it. It becomes the selection and an *Editing ★ name* bar appears. Select or unselect cases freely; the group itself does not change until you press **Save**. The bar shows how many changes are unsaved, **Revert** throws them away, and **Done** stops editing (asking first if anything is unsaved). Opening another group with unsaved changes also asks first.
+4. On the practice page, changing the set switches *From* to *Selected (n)*. In the gallery, press **Practise selected (n)**. Random cases are then dealt from the set, never the same one twice in a row.
+5. Apply the scramble to a solved cube held yellow on top, green in front, then solve the case and stop the timer.
+
+The picker column and the gallery grow with the window: maximise it for bigger pictures and more per row.
+
+**Pin one case:** double-click its picture, in the picker or the gallery, to practise it over and over. A *Pinned* bar appears above the picker; **✕ Unpin** goes back to random cases. On the practice page, the case being practised has a lighter tile. Hovering over a tile shows the case's name, group and status, and a coloured strip under the tile marks learning (orange) or finished (blue).
 
 **From** also offers:
 
@@ -51,6 +61,8 @@ python cube_timer.py         # terminal app
 **Odds:** *Balanced* gives every case the same chance. *Realistic* deals them as often as they come up in real solves (e.g. H Perm 1/72, T Perm 1/18; OLL 20 1/216).
 
 **Statuses:** mark each case *Unlearned*, *Learning* or *Finished*, either with the **This case** buttons on the practice page or by clicking the status under a card in the gallery (it cycles). Statuses are saved.
+
+The **History** tab lists the latest 40 attempts in that mode with their mean.
 
 **Show algorithm** hides the algorithm so you have to recall it; the picture stays.
 
@@ -66,7 +78,7 @@ python make_scrambles.py        # 10 per case; pass a number for more, e.g. 20
 
 It takes about a minute and a half. If the file is missing, the app falls back to reversing the algorithm.
 
-Double-click a case in the gallery to practise just that one. Every attempt is saved with its case and scramble. The **History** column shows the latest 40 attempts in that mode with their mean, and **Delete Last** removes the newest one.
+Every attempt is saved with its case and scramble; **Delete Last** removes the newest one in that mode.
 
 ### Reading the case pictures
 
@@ -81,7 +93,9 @@ Pick a mode from the menu. In a timing screen, press **Enter** to start, **Enter
 
 ## Data
 
-Times, your selected practice sets and case statuses are stored in `cube_times.db`, created next to the scripts on first run. Both front ends read and write the same file. The terminal app does not use the selected sets, statuses or scrambles. Delete it to start over; copy it to back up your history.
+Times, your selected practice sets, case statuses and your own groups are stored in `cube_times.db`, created next to the scripts on first run. Both front ends read and write the same file. The terminal app does not use the selected sets, statuses or scrambles. Delete it to start over; copy it to back up your history.
+
+The app writes a log to `cube_timer.log` (next to the scripts, rotated at 512 KB): startup time, each saved attempt, status and group changes, and any errors. Set the environment variable `CUBE_TIMER_DEBUG=1` before starting it to also log every selection change. The log is not committed to git.
 
 Averages (ao5, ao12, …) drop the best and worst time of the most recent *n* and average the rest.
 

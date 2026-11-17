@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/post_turn.py\"",
+            "timeout": 120,
+            "statusMessage": "Cube Timer post-turn checks"
+          }
+        ]
+      }
+    ]
+  }
+}

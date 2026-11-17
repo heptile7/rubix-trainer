@@ -10,10 +10,13 @@ Requirements: pip install rich
 import time
 import sqlite3
 import json
+import logging
 import random
 import sys
 import threading
 from pathlib import Path
+
+log = logging.getLogger("cube_timer.data")
 
 try:
     from rich.console import Console
@@ -183,7 +186,8 @@ def setup_scramble(case):
     if _scramble_bank is None:
         try:
             _scramble_bank = json.loads(_SCRAMBLE_FILE.read_text())["scrambles"]
-        except (OSError, ValueError, KeyError):
+        except (OSError, ValueError, KeyError) as exc:
+            log.warning("no solver scrambles (%s); using reversed algorithms", exc)
             _scramble_bank = {}
     options = _scramble_bank.get(case["name"])
     if not options:
@@ -259,6 +263,48 @@ class Database:
                 PRIMARY KEY (mode, case_name)
             )
         """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS custom_groups (
+                mode       TEXT NOT NULL,
+                group_name TEXT NOT NULL,
+                case_name  TEXT NOT NULL,
+                PRIMARY KEY (mode, group_name, case_name)
+            )
+        """)
+        self.conn.commit()
+
+    def get_custom_groups(self, mode):
+        """{group name: set of case names} for the user's own groups."""
+        groups = {}
+        for name, case in self.conn.execute(
+                "SELECT group_name,case_name FROM custom_groups WHERE mode=? "
+                "ORDER BY rowid", (mode,)):
+            groups.setdefault(name, set()).add(case)
+        return groups
+
+    def save_custom_group(self, mode, name, cases):
+        """Create or replace a custom group."""
+        self.conn.execute(
+            "DELETE FROM custom_groups WHERE mode=? AND group_name=?", (mode, name))
+        self.conn.executemany(
+            "INSERT INTO custom_groups (mode,group_name,case_name) VALUES (?,?,?)",
+            [(mode, name, c) for c in cases])
+        self.conn.commit()
+
+    def delete_custom_group(self, mode, name):
+        self.conn.execute(
+            "DELETE FROM custom_groups WHERE mode=? AND group_name=?", (mode, name))
+        self.conn.commit()
+
+    def set_statuses(self, mode, names, status):
+        """Give several cases the same status in one go."""
+        self.conn.executemany(
+            "DELETE FROM case_status WHERE mode=? AND case_name=?",
+            [(mode, n) for n in names])
+        if status != "unlearned":
+            self.conn.executemany(
+                "INSERT INTO case_status (mode,case_name,status) VALUES (?,?,?)",
+                [(mode, n, status) for n in names])
         self.conn.commit()
 
     def get_statuses(self, mode):
@@ -354,6 +400,7 @@ class Database:
         if row:
             self.conn.execute("DELETE FROM times WHERE id=?", (row[0],))
             self.conn.commit()
+            log.info("deleted last %s time (id %s)", mode, row[0])
             return True
         return False
 
