@@ -19,6 +19,8 @@ python make_scrambles.py [n]      # regenerate case_scrambles.json (n per case, 
 
 There is no test suite. `python cube_diagram.py` is the only check that runs automatically: run it after touching any algorithm or the simulator. It must print `All OLL and PLL algorithms check out.`
 
+**Checks before committing.** The `commit` skill (`.claude/skills/commit/`) runs the right checks for whatever changed, then commits with a message in the project's format: `python .claude/skills/commit/scripts/run_checks.py` (`--all` runs every check, `--list` only previews). It has scripted checks for the terminal app, the GUI, the web API and the web page in headless Chrome, and each uses a temporary copy of the database. Commit finished, tested work through it. Stage files by name, and never stage `cube_times.db`: it is tracked, but it holds the user's times.
+
 **Post-turn hook.** `.claude/settings.json` registers a Stop hook, `.claude/hooks/post_turn.py`, which runs after every turn:
 - removes stray `pytest-cache-files-*` folders;
 - byte-compiles every script and runs `cube_diagram.py`, when a `.py` file changed;
