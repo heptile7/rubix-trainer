@@ -102,7 +102,7 @@ select {
 /* ---- timer screens ---------------------------------------------------- */
 .timer-main { display: flex; flex-direction: column; align-items: center; gap: 10px; min-width: 0; }
 .timer {
-  font: 700 72px/1 var(--mono); color: var(--idle);
+  font: 700 clamp(72px, 11vh, 120px)/1 var(--mono); color: var(--idle);
   font-variant-numeric: tabular-nums; padding: 10px 0; user-select: none;
 }
 .timer.running { color: var(--running); }
@@ -123,7 +123,7 @@ select {
   width: 100%; display: flex; flex-direction: column; align-items: center;
 }
 .case-head { display: flex; align-items: center; gap: 20px; }
-.case-head .pic { width: 112px; height: 112px; flex: none; }
+.case-head .pic { width: clamp(140px, 28vh, 280px); height: clamp(140px, 28vh, 280px); flex: none; }
 .case-text { text-align: center; }
 .case-name { font-size: 18px; font-weight: 700; }
 .case-group { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
@@ -196,7 +196,7 @@ select {
 .tick.some, .tick.all { color: var(--selected); }
 .group-body.folded { display: none; }
 
-.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(54px, 1fr)); gap: 2px; padding: 0 2px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 2px; padding: 0 2px; }
 .tile {
   background: var(--panel); border: 2px solid var(--panel); border-radius: 4px;
   padding: 3px 3px 2px; cursor: pointer; user-select: none;
@@ -204,7 +204,7 @@ select {
 .tile:hover { background: #363636; }
 .tile.cur { background: var(--current); border-color: var(--current); }
 .tile.sel { border-color: var(--selected); }
-.tile .pic { display: block; width: 100%; aspect-ratio: 1; max-width: 100px; margin: auto; }
+.tile .pic { display: block; width: 100%; aspect-ratio: 1; max-width: 120px; margin: auto; }
 .tile .bar { height: 4px; margin-top: 2px; border-radius: 2px; }
 .tile.st-learning .bar { background: var(--learning); }
 .tile.st-finished .bar { background: var(--finished); }
@@ -223,11 +223,11 @@ select {
 }
 .card:hover { background: #313131; }
 .card.sel { border-color: var(--selected); }
-.card .pic { width: 100px; height: 100px; margin-bottom: 4px; }
+.card .pic { width: 100%; max-width: 160px; aspect-ratio: 1; height: auto; margin-bottom: 4px; }
 .card .name { font-size: 14px; font-weight: 700; }
 .card.sel .name { color: var(--selected); }
 .card .group { font-size: 11px; color: var(--muted); }
-.card .alg { font: 11px/1.35 var(--mono); color: var(--stopped); text-align: center; max-width: 140px; }
+.card .alg { font: 11px/1.35 var(--mono); color: var(--stopped); text-align: center; max-width: 100%; }
 .card .status {
   font-size: 11px; font-weight: 700; margin-top: 4px; padding: 1px 8px; border-radius: 4px;
   color: var(--unlearned);
