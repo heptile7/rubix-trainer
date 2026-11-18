@@ -569,7 +569,7 @@ class SessionPicker(ctk.CTkFrame):
         self._shown    = None
 
         self.grid_columnconfigure(0, weight=1)
-        self.menu = ctk.CTkOptionMenu(self, values=[""], height=28, dynamic_resizing=False,
+        self.menu = ctk.CTkOptionMenu(self, values=[""], width=210, height=28, dynamic_resizing=False,
                                       font=ctk.CTkFont(size=13, weight="bold"),
                                       command=self._on_pick)
         self.menu.grid(row=0, column=0, sticky="ew", padx=(0, 4))
@@ -1978,6 +1978,209 @@ class CasesScreen(ctk.CTkFrame):
 
 
 # ---------------------------------------------------------------------------
+# Progress chart (Statistics): a port of web/js/chart.js on a plain canvas
+# ---------------------------------------------------------------------------
+class ProgressChart(tk.Canvas):
+    """
+    x = solve number, y = time. Grey dots are single solves (+2: hollow ring,
+    DNF: an x along the top), blue / orange lines the ao5 / ao12 (a DNF average
+    breaks the line), a ring marks the PB, and in "All time" a hairline with
+    the session's name marks each session change. Moving the mouse snaps a
+    crosshair to the nearest solve and shows its values. Redrawn on resize,
+    debounced like CasePicker._reflow.
+    """
+
+    COLORS = {"ao5": "#3987e5", "ao12": "#d95926", "single": "#8c8c8c", "text": C_TEXT,
+              "muted": "#8c8c8c", "grid": "#363636", "axis": "#4a4a4a", "cross": "#6b6b6b"}
+    PAD = (50, 24, 74, 30)        # left, top, right, bottom (before scaling)
+
+    def __init__(self, parent, bg):
+        super().__init__(parent, bg=bg, highlightthickness=0, height=_px(parent, 340))
+        family = ctk.ThemeManager.theme["CTkFont"]["family"]
+        self._font = (family, -_px(parent, 11))
+        self._bold = (family, -_px(parent, 11), "bold")
+        self._mono = ("Consolas", -_px(parent, 11))
+        self._data, self._names, self._all = [], {}, False
+        self._job = None
+        self._size = (0, 0)
+        self.points = 0
+        self.bind("<Configure>", self._on_resize)
+        self.bind("<Motion>", self._on_motion)
+        self.bind("<Leave>", lambda e: self.delete("hover"))
+
+    def update_rows(self, rows, names=None, all_sessions=False):
+        """rows: Database.solve_table rows, newest first."""
+        self._data = list(reversed(rows))
+        self._names = names or {}
+        self._all = all_sessions
+        self.points = len(self._data)
+        self.draw()
+
+    def _on_resize(self, event):
+        if (event.width, event.height) == self._size:
+            return
+        if self._job:
+            self.after_cancel(self._job)
+        self._job = self.after(120, self.draw)
+
+    # ------------------------------------------------------------------
+    def _geometry(self):
+        w, h = max(self.winfo_width(), _px(self, 320)), max(self.winfo_height(), _px(self, 200))
+        left, top, right, bottom = (_px(self, v) for v in self.PAD)
+        return w, h, left, top, w - left - right, h - top - bottom
+
+    def _xs(self, i):
+        w, h, left, top, pw, ph = self._geo
+        n = len(self._data)
+        return left + (pw / 2 if n == 1 else i / (n - 1) * pw)
+
+    def _ys(self, v):
+        w, h, left, top, pw, ph = self._geo
+        return top + ph - v / self._top * ph
+
+    def draw(self):
+        self._job = None
+        self.delete("all")
+        self._size = (self.winfo_width(), self.winfo_height())
+        self._geo = w, h, left, top, pw, ph = self._geometry()
+        c, data = self.COLORS, self._data
+        if not data:
+            self.create_text(w / 2, h / 2, text="No solves to chart yet.", fill=c["muted"],
+                             font=self._font)
+            return
+        num = lambda v: v if isinstance(v, (int, float)) and v != DNF else None
+        values = [v for r in data for v in (num(r["time"]), num(r["ao5"]), num(r["ao12"])) if v is not None]
+        step, self._top = self._nice(max(values) if values else 1)
+        n = len(data)
+
+        v = 0.0
+        while v <= self._top + 1e-9:
+            self.create_line(left, self._ys(v), left + pw, self._ys(v),
+                             fill=c["axis"] if v == 0 else c["grid"])
+            self.create_text(left - _px(self, 6), self._ys(v), text=fmt(v), anchor="e",
+                             fill=c["muted"], font=self._mono)
+            v += step
+        room = max(2, int(pw // _px(self, 90)))
+        every = max(1, math.ceil((n - 1) / (room - 1))) if n > 1 else 1
+        ticks = list(range(0, n, every))
+        if ticks[-1] != n - 1:
+            if n - 1 - ticks[-1] < every / 2 and len(ticks) > 1:
+                ticks.pop()
+            ticks.append(n - 1)
+        for i in ticks:
+            self.create_text(self._xs(i), top + ph + _px(self, 14), text=f"#{data[i]['n']}",
+                             fill=c["muted"], font=self._mono)
+
+        if self._all:
+            last_label = -1e9
+            for i in range(1, n):
+                if data[i]["session"] != data[i - 1]["session"]:
+                    xs = (self._xs(i - 1) + self._xs(i)) / 2
+                    self.create_line(xs, top, xs, top + ph, fill=c["axis"])
+                    if xs - last_label > _px(self, 80):
+                        name = self._names.get(data[i]["session"], f"Session {data[i]['session']}")
+                        self.create_text(xs + _px(self, 4), top + ph - _px(self, 8), text=name,
+                                         anchor="w", fill=c["muted"], font=self._font)
+                        last_label = xs
+
+        r = _px(self, 1.8 if n > 400 else 3)
+        band = top / 2
+        for i, row in enumerate(data):
+            cx = self._xs(i)
+            if row["penalty"] == "dnf":
+                d = _px(self, 3)
+                self.create_line(cx - d, band - d, cx + d, band + d, fill=c["muted"], width=1.4, tags="dnf")
+                self.create_line(cx + d, band - d, cx - d, band + d, fill=c["muted"], width=1.4)
+                continue
+            cy = self._ys(row["time"])
+            if row["penalty"] == "+2":
+                self.create_oval(cx - r, cy - r, cx + r, cy + r, outline=c["single"], width=1.3, tags="ring")
+            else:
+                self.create_oval(cx - r, cy - r, cx + r, cy + r, fill=c["single"], outline="", tags="dot")
+
+        ends = []
+        for key in ("ao12", "ao5"):
+            seg, last = [], None
+            for i, row in enumerate(data):
+                v = num(row[key])
+                if v is None:
+                    if len(seg) >= 4:
+                        self.create_line(*seg, fill=c[key], width=2, capstyle="round", joinstyle="round", tags=key)
+                    seg = []
+                    continue
+                seg += [self._xs(i), self._ys(v)]
+                last = i
+            if len(seg) >= 4:
+                self.create_line(*seg, fill=c[key], width=2, capstyle="round", joinstyle="round", tags=key)
+            if last is not None:
+                ends.append([key, last, self._ys(data[last][key])])
+        if len(ends) == 2 and abs(ends[0][2] - ends[1][2]) < _px(self, 14):
+            mid = (ends[0][2] + ends[1][2]) / 2
+            hi = 0 if ends[0][2] < ends[1][2] else 1
+            ends[hi][2], ends[1 - hi][2] = mid - _px(self, 7), mid + _px(self, 7)
+        for key, last, ly in ends:
+            self.create_text(self._xs(last) + _px(self, 8), ly, text=f"{key} {fmt(data[last][key])}",
+                             anchor="w", fill=c["text"], font=self._mono)
+
+        best = None
+        for i, row in enumerate(data):
+            if num(row["time"]) is not None and (best is None or row["time"] < data[best]["time"]):
+                best = i
+        if best is not None:
+            bx, by, pr = self._xs(best), self._ys(data[best]["time"]), _px(self, 6)
+            self.create_oval(bx - pr, by - pr, bx + pr, by + pr, outline=c["text"], width=1.5, tags="pb")
+            self.create_text(bx, by + _px(self, 16), text=f"PB {fmt(data[best]['time'])}",
+                             fill=c["text"], font=self._bold)
+
+    @staticmethod
+    def _nice(maximum, ticks=5):
+        if not maximum > 0:
+            return 1, 1
+        raw = maximum / ticks
+        mag = 10 ** math.floor(math.log10(raw))
+        step = next(m * mag for m in (1, 2, 2.5, 5, 10) if m * mag >= raw)
+        return step, math.ceil(maximum / step) * step
+
+    # ------------------------------------------------------------------
+    def show_point(self, i):
+        """Crosshair and readout for solve i (also used by tests)."""
+        self.delete("hover")
+        if not self._data:
+            return
+        i = max(0, min(len(self._data) - 1, i))
+        row, c = self._data[i], self.COLORS
+        w, h, left, top, pw, ph = self._geo
+        cx = self._xs(i)
+        cy = top / 2 if row["penalty"] == "dnf" else self._ys(row["time"])
+        self.create_line(cx, top, cx, top + ph, fill=c["cross"], tags="hover")
+        pr = _px(self, 5)
+        self.create_oval(cx - pr, cy - pr, cx + pr, cy + pr, outline=c["text"], width=2, tags="hover")
+        lines = [f"#{row['n']}" + (f"  ·  {row['case']}" if row["case"] else ""),
+                 f"{fmt_solve(row['seconds'], row['penalty'])}  single",
+                 f"{fmt(row['ao5'])}  ao5", f"{fmt(row['ao12'])}  ao12"]
+        if row["note"]:
+            lines.append(f"⚑ {row['note']}")
+        lines.append(row["ts"])
+        bw, lh = _px(self, 180), _px(self, 16)
+        bx = cx + _px(self, 14) if cx + _px(self, 14) + bw < w else cx - _px(self, 14) - bw
+        by = top
+        self.create_rectangle(bx, by, bx + bw, by + lh * len(lines) + _px(self, 10),
+                              fill="#1c1c1c", outline="#444444", tags="hover")
+        colors = [c["text"], c["text"], c["ao5"], c["ao12"]] + [C_STOPPED] * bool(row["note"]) + [c["muted"]]
+        for k, (text, color) in enumerate(zip(lines, colors)):
+            self.create_text(bx + _px(self, 8), by + _px(self, 6) + k * lh, text=text, anchor="nw",
+                             fill=color, font=self._bold if k == 0 else self._font, tags="hover")
+        self.hover = i
+
+    def _on_motion(self, event):
+        if not self._data:
+            return
+        w, h, left, top, pw, ph = self._geo
+        n = len(self._data)
+        self.show_point(0 if n == 1 else round((event.x - left) / pw * (n - 1)))
+
+
+# ---------------------------------------------------------------------------
 # Statistics Screen
 # ---------------------------------------------------------------------------
 class StatsScreen(ctk.CTkFrame):
@@ -1989,6 +2192,7 @@ class StatsScreen(ctk.CTkFrame):
     """
 
     LIMIT = 200                       # rows listed at most (the stats cover every solve)
+    CHART_LIMIT = 5000                # solves charted at most
     MODES = {"Full Solve": "full", "OLL": "oll", "PLL": "pll"}
     SCOPES = {"This session": "session", "All time": "all"}
 
@@ -2038,6 +2242,10 @@ class StatsScreen(ctk.CTkFrame):
             sf = ctk.CTkScrollableFrame(tab)
             sf.grid(row=row, column=0, sticky="nsew", padx=4, pady=4)
             self._scroll[tab_name] = sf
+            if tab_name == "Solves":
+                self.chart = ProgressChart(tab, bg=sf._parent_canvas.cget("bg"))
+                self.chart.grid(row=row, column=0, sticky="nsew", padx=4, pady=4)
+                self.chart.grid_remove()
 
     def _build_solves_controls(self, tab):
         bar = ctk.CTkFrame(tab, fg_color="transparent")
@@ -2053,9 +2261,17 @@ class StatsScreen(ctk.CTkFrame):
         self.flagged_only = ctk.CTkCheckBox(bar, text="Flagged only", width=110,
                                             command=lambda: self._set())
         self.flagged_only.grid(row=0, column=2)
+        self.view_seg = ctk.CTkSegmentedButton(bar, values=["Table", "Chart"],
+                                               command=lambda v: self._set())
+        self.view_seg.set("Table")
+        self.view_seg.grid(row=0, column=3, padx=(16, 0))
         self.session_picker = SessionPicker(bar, self.db, self._mode, "Full Solve",
                                             on_change=self._set)
         self.session_picker.grid(row=1, column=0, columnspan=3, pady=(6, 0), sticky="w")
+        self.case_menu = ctk.CTkOptionMenu(bar, values=["All cases"], width=120, height=26,
+                                           dynamic_resizing=False, command=lambda v: self._set())
+        self.case_menu.grid(row=1, column=3, padx=(16, 0), pady=(6, 0), sticky="w")
+        self._case_menu_for = None
 
         self.stats_block = StatsBlock(tab, bg=tab.cget("fg_color")[1]
                                       if isinstance(tab.cget("fg_color"), (list, tuple))
@@ -2128,6 +2344,27 @@ class StatsScreen(ctk.CTkFrame):
             self.session_picker.refresh()
         self.stats_block.update_stats(db.session_name(mode), db.stats(mode, "session"),
                                       db.stats(mode))
+        chart_view = self.view_seg.get() == "Chart"
+        if mode != "full" and self._case_menu_for != mode:
+            self._case_menu_for = mode
+            self.case_menu.configure(values=["All cases"] + [c["name"] for c in CASES[mode]])
+            self.case_menu.set("All cases")
+        (self.case_menu.grid if chart_view and mode != "full" else self.case_menu.grid_remove)()
+        (self.flagged_only.grid if not chart_view else self.flagged_only.grid_remove)()
+        (self.buttons.grid if not chart_view else self.buttons.grid_remove)()
+        if chart_view:
+            self._scroll["Solves"].grid_remove()
+            self.chart.grid()
+            case = None if mode == "full" or self.case_menu.get() == "All cases" else self.case_menu.get()
+            rows, _total = db.solve_table(mode, scope, limit=self.CHART_LIMIT, case_name=case)
+            names = {n: name for n, name, _c, _l in db.list_sessions(mode)}
+            self.chart.update_rows(rows, names, scope == "all")
+            where = f"“{db.session_name(mode)}”" if scope == "session" else "all sessions"
+            self.table_note.configure(text=f"{len(rows)} solve(s){f' of {case}' if case else ''} "
+                                           f"in {where}.  Move the mouse over the chart for values.")
+            return
+        self.chart.grid_remove()
+        self._scroll["Solves"].grid()
         flagged = bool(self.flagged_only.get())
         self._rows, total = db.solve_table(mode, scope, flagged_only=flagged, limit=self.LIMIT)
         where = f"“{db.session_name(mode)}”" if scope == "session" else "all"

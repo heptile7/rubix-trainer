@@ -279,6 +279,19 @@ with sync_playwright() as p:
     flagged = page.locator(".shown table.solves-table tbody tr").count()
     check("stats flagged only", flagged == rows_where("flagged=1 AND mode='full'"), flagged)
     page.uncheck(".shown .stats-filters input[type=checkbox]"); page.wait_for_timeout(300)
+    page.click(".shown .stats-filters button[data-key=chart]"); page.wait_for_timeout(400)
+    pts = page.evaluate("window.cubeApp.screens.stats.chart.points")
+    paths = page.evaluate("""() => { const q = (c) => document.querySelector('.shown .chart-svg .' + c);
+        const m = (c) => (q(c).getAttribute('d').match(/M/g) || []).length;
+        return [m('dots'), m('rings'), m('dnfs') / 2, !!q('line-ao5'), !!q('pb')]; }""")
+    check("chart draws every solve", paths[0] + paths[1] + paths[2] == pts > 0
+          and paths[3] == (pts >= 5) and paths[4], f"{paths} of {pts}")  # one average draws a point-path
+    box = page.locator(".shown .chart-svg").bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + 120); page.wait_for_timeout(100)
+    check("chart tooltip", "ao12" in page.inner_text(".shown .chart-tip"))
+    page.mouse.move(2, 2)
+    page.screenshot(path=os.path.join(SHOTS, "web_chart.png"))
+    page.click(".shown .stats-filters button[data-key=solves]"); page.wait_for_timeout(200)
     page.click(".shown .tabs button[data-key=oll]"); page.wait_for_timeout(150)
     page.click(".shown .stats-filters button[data-key=cases]"); page.wait_for_timeout(300)
     check("stats oll table", page.locator(".shown table.stats tbody tr").count() == 57)

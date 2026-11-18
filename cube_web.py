@@ -322,13 +322,17 @@ def create_app(db_path=DB_PATH):
     # --- single solves and sessions ----------------------------------------
     @app.get("/api/solves/{mode}")
     async def get_solves(mode: str, scope: str = "session", flagged: bool = False,
-                         limit: int = 200):
-        """Rows for the Statistics table, each with its ao5 / ao12, plus the total in scope."""
+                         limit: int = 200, case: str | None = None):
+        """Rows for the Statistics table and chart, each with its ao5 / ao12, plus
+        the total in scope. case narrows them (and the averages) to one case."""
         check_mode(mode)
         if scope not in ("session", "all"):
             raise HTTPException(400, f"unknown scope {scope!r}")
+        if case:
+            check_mode(mode, trainer=True)
+            check_names(mode, [case])
         rows, total = db.solve_table(mode, scope, flagged_only=flagged,
-                                     limit=max(1, min(limit, 5000)))
+                                     limit=max(1, min(limit, 5000)), case_name=case or None)
         return {"rows": jsonable(rows), "total": total, **stats(mode)}
 
     @app.get("/api/stats/{mode}")

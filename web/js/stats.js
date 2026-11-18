@@ -7,8 +7,10 @@
 import { api } from "./api.js";
 import { h, fmt, fmtSolve } from "./util.js";
 import { statsBlock, solveAction, timeClass, sessionPicker } from "./solves.js";
+import { progressChart } from "./chart.js";
 
 const LIMIT = 200;      // rows listed at most (the stats cover every solve)
+const CHART_LIMIT = 5000;  // solves charted at most
 
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const td = (v, cls = "") => `<td${cls ? ` class="${cls}"` : ""}>${esc(v)}</td>`;
@@ -66,11 +68,18 @@ export function statsScreen(store) {
   const summary = statsBlock();
   const body = h("div");
   const note = h("div.hint", { style: "text-align:left" });
-  const tabs = seg([["full", "Full Solve"], ["oll", "OLL"], ["pll", "PLL"]], (k) => { mode = k; viewSeg.el.hidden = k === "full"; show(); });
+  const tabs = seg([["full", "Full Solve"], ["oll", "OLL"], ["pll", "PLL"]], (k) => {
+    mode = k;
+    if (mode === "full" && view === "cases") { view = "solves"; viewSeg.set(view); }
+    show();
+  });
   const scopeSeg = seg([["session", "This session"], ["all", "All time"]], (k) => { scope = k; show(); });
-  const viewSeg = seg([["solves", "Solves"], ["cases", "Cases"]], (k) => { view = k; show(); });
+  const viewSeg = seg([["solves", "Solves"], ["chart", "Chart"], ["cases", "Cases"]], (k) => { view = k; show(); });
   const flagBox = h("input", { type: "checkbox", onchange: () => { flaggedOnly = flagBox.checked; show(); } });
-  tabs.set(mode); scopeSeg.set(scope); viewSeg.set(view); viewSeg.el.hidden = true;
+  const flagLabel = h("label.switch", null, flagBox, "Flagged only");
+  const caseSelect = h("select.small-select.chart-case", { title: "Chart one case", onchange: () => { caseSelect.blur(); show(); } });
+  const chart = progressChart();
+  tabs.set(mode); scopeSeg.set(scope); viewSeg.set(view);
   // one session picker per mode; the open mode's is shown
   const titles = { full: "Full Solve", oll: "OLL", pll: "PLL" };
   const pickers = Object.fromEntries(Object.keys(titles).map((m) => [m, sessionPicker(store, m, { title: titles[m] })]));
@@ -90,8 +99,30 @@ export function statsScreen(store) {
     const t = ++token;
     summary.update(store.stats[mode]);
     for (const [m, p] of Object.entries(pickers)) { p.el.hidden = m !== mode; if (m === mode) p.refresh(); }
+    viewSeg.el.querySelector("[data-key=cases]").hidden = mode === "full";
+    flagLabel.hidden = view !== "solves";
+    scopeSeg.el.hidden = view === "cases";
+    syncCases();
+    caseSelect.hidden = !(view === "chart" && mode !== "full");
+    chart.el.hidden = view !== "chart";
+    body.hidden = view === "chart";
     try {
       let html;
+      if (view === "chart") {
+        const caseName = mode === "full" ? "" : caseSelect.value;
+        const r = await api.solves(mode, scope, false, CHART_LIMIT, caseName);
+        if (t !== token) return;
+        const { rows: _rows, total: _total, ...fresh } = r;
+        store.stats[mode] = fresh;
+        pickers[mode].refresh();
+        summary.update(store.stats[mode]);
+        const names = Object.fromEntries(fresh.sessions.map((x) => [x.n, x.name]));
+        chart.update(r.rows, names, scope === "all");
+        note.textContent = (r.rows.length >= CHART_LIMIT ? `Latest ${CHART_LIMIT} shown; ` : "") +
+          `${r.rows.length} solve(s)${caseName ? ` of ${caseName}` : ""} in ` +
+          `${scope === "session" ? `“${fresh.session_name}”` : "all sessions"}. Hover or use the arrow keys for values.`;
+        return;
+      }
       if (mode !== "full" && view === "cases") {
         html = caseTable(store.cases[mode], await api.summary(mode));
         note.textContent = "Best and average leave out DNFs; +2 penalties are included.";
@@ -107,12 +138,20 @@ export function statsScreen(store) {
         html = solveTable(mode, rows, best);
         const what = flaggedOnly ? "flagged solves" : "solves";
         note.textContent = (rows.length >= LIMIT ? `Latest ${LIMIT} ${what} shown; ` : "") +
-          `${r.total} solve(s) in ${scope === "session" ? `session ${r.session_no}` : "all"}.`;
+          `${r.total} solve(s) in ${scope === "session" ? `“${r.session_name}”` : "all"}.`;
       }
       if (t === token) body.innerHTML = html;
     } catch (err) {
       if (t === token) body.innerHTML = '<p class="muted">Couldn\'t load statistics - is the server running?</p>';
     }
+  }
+
+  let casesFor = "";
+  function syncCases() {
+    if (mode === "full" || casesFor === mode) return;
+    casesFor = mode;
+    caseSelect.replaceChildren(h("option", { value: "", text: "All cases" }),
+      ...store.cases[mode].map((c) => h("option", { value: c.name, text: c.name })));
   }
 
   const el = h("section.screen.stats-screen", null,
@@ -121,11 +160,13 @@ export function statsScreen(store) {
     h("div.tabs", null, tabs.el),
     summary.el,
     h("div.row.stats-filters", null, viewSeg.el, ...Object.values(pickers).map((p) => p.el), scopeSeg.el,
-      h("label.switch", null, flagBox, "Flagged only")),
+      flagLabel, caseSelect),
     note,
+    chart.el,
     body);
   return {
     el,
+    chart,
     onShow: () => { shown = true; show(); },
     onHide: () => { shown = false; },
   };

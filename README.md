@@ -94,9 +94,20 @@ Two small differences in the web app:
 | OLL Practice | Deals a random case with a real scramble, its picture and (optionally) its algorithm, and times it. Draw from all cases, your selected set, your slowest cases, a learning status or one group; or pin a specific case. The right-hand column switches between a **case picker** (mini pictures to build your set) and your **history** (the current session). |
 | PLL Practice | Same as OLL Practice, for the 21 PLL cases. |
 | Case Gallery | A large picture of every OLL and PLL case, grouped by shape, with its name, algorithm and learning status. Click cases to build a practice set. |
-| Statistics | For Full Solve, OLL or PLL: session and all-time stats, and every solve with its ao5 / ao12, for this session or all time, optionally flagged solves only. Each row has +2 / DNF / flag / delete. Also count / best / average for every OLL and PLL case. |
+| Statistics | For Full Solve, OLL or PLL: session and all-time stats, and every solve with its ao5 / ao12, for this session or all time, optionally flagged solves only. Each row has +2 / DNF / flag / delete. A **Chart** view plots your progress. Also count / best / average for every OLL and PLL case. |
 
 **Space** starts the timer, stops it, then moves on to the next scramble or case. Each time is saved when the timer stops; **Delete Last** removes the most recent one.
+
+### Progress chart
+
+In **Statistics**, choose **Chart** (web app) or **Chart** next to *Table* (desktop app). It plots every solve of the selected session, or of **All time**, from first to latest:
+
+- grey dots are single solves; a hollow ring is a +2, and an × along the top is a DNF;
+- the blue line is your ao5 and the orange line your ao12 (a DNF average leaves a gap);
+- a ring marks your best single (**PB**);
+- in *All time*, a thin vertical line with the session's name shows where each session starts, so you can compare cubes.
+
+Move the mouse over the chart (or, in the web app, focus it and use the arrow keys) to read a solve's time, ao5, ao12, note and date. For OLL / PLL, a menu narrows the chart to one case. The Solves table shows the same values without hovering.
 
 ### Inspection and hold to start
 

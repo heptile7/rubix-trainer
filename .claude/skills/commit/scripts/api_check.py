@@ -116,6 +116,9 @@ with TestClient(app) as c:
     if len(only["sessions"]) == 1:
         check("last session can't be deleted",
               c.delete(f"/api/session/pll/{only['session_no']}").status_code == 400)
+    t = c.get("/api/solves/oll?scope=all&case=OLL%2021&limit=5000").json()
+    check("solves for one case", t["rows"] and all(x["case"] == "OLL 21" for x in t["rows"]))
+    check("unknown case 400", c.get("/api/solves/oll?scope=all&case=Nope").status_code == 400)
     # settings and attempts recorded with an inspection penalty
     s0 = c.get("/api/settings").json()
     check("default settings", s0["hold_to_start"] is True and s0["inspection.full"] is False

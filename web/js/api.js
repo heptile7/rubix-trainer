@@ -44,8 +44,9 @@ export const api = {
   summary:      (mode) => call("GET", `/api/summary/${mode}`),
   addTime:      (attempt) => write("POST", "/api/times", attempt),
   deleteLast:   (mode) => write("DELETE", `/api/times/last/${mode}`),
-  solves:       (mode, scope, flagged, limit = 200) =>
-    call("GET", `/api/solves/${mode}?scope=${scope}&flagged=${flagged}&limit=${limit}`),
+  solves:       (mode, scope, flagged, limit = 200, caseName = "") =>
+    call("GET", `/api/solves/${mode}?scope=${scope}&flagged=${flagged}&limit=${limit}` +
+                (caseName ? `&case=${enc(caseName)}` : "")),
   setPenalty:   (id, penalty) => write("PUT", `/api/solves/${id}/penalty`, { penalty }),
   setFlag:      (id, flagged, note) => write("PUT", `/api/solves/${id}/flag`, { flagged, note }),
   deleteSolve:  (id) => write("DELETE", `/api/solves/${id}`),

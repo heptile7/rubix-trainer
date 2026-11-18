@@ -176,6 +176,23 @@ oll.timer_toggle(); t[0] += 1.2; oll.timer_toggle(); pump(3)
 check("practice attempt saved without penalty", newest("oll")[3] is None)
 oll.options._save("inspection.oll", False)
 
+# --- progress chart ---
+app.show_screen("stats"); pump()
+st = app.screen("stats")
+st.view_seg.set("Chart"); st._set(scope="all"); pump(30)
+ch = st.chart
+drawn = len(ch.find_withtag("dot")) + len(ch.find_withtag("ring")) + len(ch.find_withtag("dnf"))
+check("chart draws every solve", drawn == ch.points == db.stats(st._mode)["count"] > 0,
+      f"{drawn} / {ch.points}")
+ok5 = [isinstance(r["ao5"], float) and r["ao5"] != ct.DNF for r in ch._data]
+line_due = any(a and b for a, b in zip(ok5, ok5[1:]))     # a line needs two averages in a row
+check("chart has ao5 line / PB", bool(ch.find_withtag("ao5")) == line_due
+      and len(ch.find_withtag("pb")) == 1, f"due={line_due}")
+ch.show_point(ch.points - 1); pump()
+check("chart readout", len(ch.find_withtag("hover")) > 3)
+st.view_seg.set("Table"); st._set(); pump()
+check("chart back to table", not ch.winfo_ismapped() and len(st._rows) > 0)
+
 # resize: layouts reflow without error
 app.root.geometry("1600x1000"); app.show_screen("cases"); pump(40)
 app.root.geometry("1000x660"); app.show_screen("oll"); pump(40)

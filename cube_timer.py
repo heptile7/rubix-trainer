@@ -600,14 +600,15 @@ class Database:
         log.info("deleted solve %s", solve_id)
         return cur.rowcount > 0
 
-    def solve_table(self, mode, scope="all", flagged_only=False, limit=None):
+    def solve_table(self, mode, scope="all", flagged_only=False, limit=None, case_name=None):
         """
-        (rows, total) for a statistics table: rows are dicts, newest first, with
-        the solve's fields plus `time` (penalty applied) and the ao5 / ao12
-        ending at that solve. The averages are worked out over every solve in
-        scope, so they are right even when only flagged solves are listed.
+        (rows, total) for a statistics table or the progress chart: rows are
+        dicts, newest first, with the solve's fields plus `time` (penalty
+        applied) and the ao5 / ao12 ending at that solve. The averages are
+        worked out over every solve in scope (one case's, with case_name), so
+        they are right even when only flagged solves are listed.
         """
-        all_rows = self.solves(mode, scope)
+        all_rows = self.solves(mode, scope, case_name=case_name)
         times = [effective(r[2], r[3]) for r in all_rows]
         out = []
         for i, r in enumerate(all_rows):
