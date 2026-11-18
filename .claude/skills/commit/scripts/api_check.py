@@ -163,6 +163,34 @@ with TestClient(app) as c:
     check("client log", c.post("/api/log", json={"message": "test from api_test"}).status_code == 200)
     check("docs", c.get("/api/docs").status_code == 200)
 
+    # export / import
+    r = c.get("/api/export/csv")
+    lines = r.text.strip().splitlines()
+    n_all = sum(c.get(f"/api/stats/{m}").json()["all"]["count"] for m in ("full", "oll", "pll"))
+    check("export CSV", r.headers["content-type"].startswith("text/csv")
+          and "attachment" in r.headers["content-disposition"]
+          and lines[0].startswith("mode,session,session_name,case,time") and len(lines) == n_all + 1,
+          f"{len(lines) - 1} rows / {n_all}")
+    backup = c.get("/api/export/backup").json()
+    check("export backup", backup["app"] == "cube-timer" and len(backup["solves"]) == n_all)
+    r = c.post("/api/import", json={"data": backup}).json()
+    check("re-import own backup adds nothing", r["added"] == 0 and r["skipped"] == n_all, r)
+    cs = c.get("/api/export/cstimer?modes=full").json()
+    check("export csTimer", "properties" in cs and "session1" in cs)
+    fixture = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "cstimer_sample.txt"), encoding="utf-8"))
+    r = c.post("/api/import", json={"data": fixture}).json()
+    names_now = [s["name"] for s in c.get("/api/stats/full").json()["sessions"]]
+    check("import csTimer file", r["added"] == 7 and r["sessions"] == 2
+          and {"Fixture GAN", "Fixture OH"} <= set(names_now), r)
+    t = c.get("/api/solves/full?scope=all&limit=5000").json()["rows"]
+    got = {(x["seconds"], x["penalty"], x["note"]) for x in t}
+    check("csTimer penalties and comments", {(13.21, "+2", None), (15.0, "dnf", None),
+                                             (11.87, None, "pb attempt")} <= got)
+    r = c.post("/api/import", json={"data": fixture}).json()
+    check("import twice adds nothing", r["added"] == 0 and r["skipped"] == 7)
+    check("import junk 400", c.post("/api/import", json={"data": {"x": 1}}).status_code == 400)
+    check("import a copy first", any("before-import" in f for f in os.listdir(os.path.dirname(tmp))))
+
 # dependency check: too-old packages give a clear exit message, not a crash
 real_version = cube_web.version
 try:

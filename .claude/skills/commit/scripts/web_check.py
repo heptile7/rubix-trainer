@@ -252,6 +252,21 @@ with sync_playwright() as p:
     check("pll arrows drawn", page.locator(".shown .case-head svg polygon").count() >= 1)
     page.screenshot(path=os.path.join(SHOTS, "web_pll.png"))
 
+    # --- import a csTimer file through the page
+    page.goto(URL + "#stats"); page.wait_for_selector(".shown table.stat-block")
+    msgs = []
+    def on_import_dialog(d):
+        msgs.append(d.message); d.accept()
+    page.on("dialog", on_import_dialog)
+    with page.expect_navigation():
+        page.set_input_files(".shown .io input[type=file]", os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "cstimer_sample.txt"))
+    page.remove_listener("dialog", on_import_dialog)
+    page.wait_for_selector(".shown table.stat-block")
+    names_now = page.evaluate("window.cubeApp.store.stats.full.sessions.map(s => s.name)")
+    check("import csTimer file in the page", "Fixture GAN" in names_now and any("Added 7" in m for m in msgs),
+          str(msgs[-1:]))
+    check("export links", page.locator(".shown details.menu a[href='/api/export/csv']").count() == 1)
+
     # --- gallery
     page.goto(URL + "#cases"); page.wait_for_selector(".shown .card")
     check("gallery cards", page.locator(".shown .card").count() == 78)

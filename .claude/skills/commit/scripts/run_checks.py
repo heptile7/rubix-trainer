@@ -19,7 +19,7 @@ CHECKS = {
     "compile": "byte-compile every script",
     "algorithms": "python cube_diagram.py (every OLL/PLL algorithm)",
     "cli": "terminal app driven by scripted input",
-    "gui": "customtkinter app driven headlessly (90 checks)",
+    "gui": "customtkinter app driven headlessly (93 checks)",
     "api": "web API via TestClient, incl. every case's scramble",
     "web": "web page in headless Chrome via Playwright",
 }
@@ -30,6 +30,8 @@ RULES = [
     (lambda p: p == "cube_diagram.py",     {"compile", "algorithms", "gui", "api", "web"}),
     (lambda p: p == "cube_timer_gui.py",   {"compile", "gui"}),
     (lambda p: p == "cube_web.py",         {"compile", "api", "web"}),
+    (lambda p: p == "cube_io.py",          {"compile", "gui", "api", "web"}),
+    (lambda p: p.startswith(".claude/skills/commit/scripts/fixtures/"), {"gui", "api", "web"}),
     (lambda p: p.startswith("web/"),       {"api", "web"}),
     (lambda p: p == "case_scrambles.json", {"api", "gui"}),
     (lambda p: p == "requirements.txt",    {"compile", "gui", "api", "web"}),

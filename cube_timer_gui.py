@@ -7,6 +7,7 @@ Shares the same SQLite database (cube_times.db) as the CLI version.
 Requirements: pip install customtkinter rich
 """
 
+import json
 import logging
 import math
 import random
@@ -15,9 +16,11 @@ import time
 import tkinter as tk
 import traceback
 from pathlib import Path
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
+
+import cube_io
 
 from cube_timer import (
     DNF,
@@ -944,6 +947,17 @@ class SelectionStore:
     def listen(self, fn):
         """fn(mode) is called after every change."""
         self._listeners.append(fn)
+
+    def reload(self):
+        """Read everything again from the database (after an import merged into it)."""
+        for m in CASES:
+            self.selected[m].clear()
+            self.selected[m].update(self.db.get_selected(m))
+            self.statuses[m].clear()
+            self.statuses[m].update(self.db.get_statuses(m))
+            self.custom[m].clear()
+            self.custom[m].update(self.db.get_custom_groups(m))
+            self._changed(m)
 
     def _changed(self, mode):
         log.debug("%s selection now %d cases (editing group: %s)",
@@ -2196,10 +2210,23 @@ class StatsScreen(ctk.CTkFrame):
     MODES = {"Full Solve": "full", "OLL": "oll", "PLL": "pll"}
     SCOPES = {"This session": "session", "All time": "all"}
 
-    def __init__(self, parent, root, db):
+    EXPORT_TYPES = [("CSV spreadsheet", "*.csv"), ("Cube Timer backup", "*.json"),
+                    ("csTimer file", "*.txt")]
+
+    def __init__(self, parent, root, db, on_imported=None):
         super().__init__(parent, fg_color="transparent")
         self.root = root
         self.db   = db
+        self.on_imported = on_imported   # after an import: the app reloads its store
+        # dialogs, replaceable in tests
+        self.ask_save = lambda: filedialog.asksaveasfilename(
+            title="Export solves", filetypes=self.EXPORT_TYPES, defaultextension=".csv",
+            initialfile=f"cube-times-{time.strftime('%Y%m%d')}.csv")
+        self.ask_open = lambda: filedialog.askopenfilename(
+            title="Import a Cube Timer backup or a csTimer file",
+            filetypes=[("Backup or csTimer file", "*.json *.txt"), ("All files", "*.*")])
+        self.confirm = lambda msg: messagebox.askyesno("Import", msg)
+        self.tell = lambda msg: messagebox.showinfo("Cube Timer", msg)
         self._scroll   = {}
         self._mode     = "full"
         self._scope    = "session"
@@ -2224,7 +2251,11 @@ class StatsScreen(ctk.CTkFrame):
             hdr, text="Refresh", width=90, height=30,
             fg_color="gray30", hover_color="gray40",
             command=self.refresh,
-        ).grid(row=0, column=1)
+        ).grid(row=0, column=3)
+        ctk.CTkButton(hdr, text="Export…", width=90, height=30, fg_color="gray30",
+                      hover_color="gray40", command=self.export).grid(row=0, column=1, padx=(0, 6))
+        ctk.CTkButton(hdr, text="Import…", width=90, height=30, fg_color="gray30",
+                      hover_color="gray40", command=self.import_file).grid(row=0, column=2, padx=(0, 6))
 
         # Tab view
         self.tabs = ctk.CTkTabview(self)
@@ -2283,6 +2314,61 @@ class StatsScreen(ctk.CTkFrame):
         self.table_note = ctk.CTkLabel(tab, text="", height=16, font=ctk.CTkFont(size=11),
                                        text_color="gray55")
         self.table_note.grid(row=3, column=0, padx=8, sticky="w")
+
+    # ------------------------------------------------------------------
+    # Export / import (cube_io)
+    # ------------------------------------------------------------------
+    def export(self, path=None):
+        """Save every solve; the file's extension picks the format (.csv, .json, .txt)."""
+        path = path or self.ask_save()
+        if not path:
+            return None
+        ext = Path(path).suffix.lower()
+        if ext == ".json":
+            text = json.dumps(cube_io.export_backup(self.db), indent=1, default=str)
+            what = "Cube Timer backup"
+        elif ext == ".txt":
+            text = json.dumps(cube_io.export_cstimer(self.db, ("full", "oll", "pll")))
+            what = "csTimer file"
+        else:
+            text = cube_io.export_csv(self.db)
+            what = "CSV"
+        Path(path).write_text(text, encoding="utf-8", newline="")
+        log.info("exported %s to %s", what, path)
+        self.tell(f"Saved a {what} to\n{path}")
+        return path
+
+    def import_file(self, path=None):
+        """Merge a Cube Timer backup or a csTimer export; returns the summary or None."""
+        path = path or self.ask_open()
+        if not path:
+            return None
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            self.tell("That file isn't a Cube Timer backup or a csTimer export "
+                      "(it isn't JSON). CSV files can't be imported.")
+            return None
+        kind = cube_io.detect_format(data)
+        if kind is None:
+            self.tell("That file is neither a Cube Timer backup nor a csTimer export.")
+            return None
+        what = "this Cube Timer backup" if kind == "cube-timer" else \
+            "this csTimer file (its sessions go into Full Solve)"
+        if not self.confirm(f"Import {what}?\nSolves you already have are skipped; nothing is "
+                            "replaced, and the database is copied first."):
+            return None
+        names = {m: {c["name"] for c in cs} for m, cs in CASES.items()}
+        try:
+            summary = cube_io.import_any(self.db, data, mode="full", case_names=names)
+        except cube_io.ImportProblem as exc:
+            self.tell(f"Couldn't import: {exc}")
+            return None
+        if self.on_imported:
+            self.on_imported()
+        self.refresh()
+        self.tell(cube_io.summary_text(summary))
+        return summary
 
     def _set(self, mode=None, scope=None):
         if mode:
@@ -2545,7 +2631,8 @@ class CubeTimerApp:
                                                "pll", "PLL Practice"),
             "cases": lambda: CasesScreen(self.content, self.root, self.db, self.store,
                                          self._open_case, self._practise_selected),
-            "stats": lambda: StatsScreen(self.content, self.root, self.db),
+            "stats": lambda: StatsScreen(self.content, self.root, self.db,
+                                         on_imported=self.store.reload),
         }
 
     def screen(self, name):

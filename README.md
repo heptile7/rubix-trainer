@@ -172,6 +172,16 @@ It takes about a minute and a half. If the file is missing, the app falls back t
 
 Every attempt is saved with its case and scramble; **Delete Last** removes the newest one in that mode.
 
+### Export and import
+
+In **Statistics**, **Export** saves your solves (the web app downloads the file; the desktop app asks where to save it and picks the format from the file type):
+
+- **CSV** — one row per solve (mode, session, case, time with the penalty applied, raw time, penalty, flag, note, scramble, date), for Excel or Google Sheets.
+- **Cube Timer backup** (`.json`) — everything: named sessions, every solve with its penalty, flag and note, your practice selections, case statuses and groups. Use it to back up or move to another computer.
+- **csTimer file** (`.txt`) — opens in csTimer with *Import from file*. Each session becomes a csTimer session; OLL / PLL sessions are named *OLL – name* and keep the case in each solve's comment.
+
+**Import…** reads a Cube Timer backup or a csTimer export (CSV can't be imported). It **merges** and never replaces: sessions are matched by name, or created, and solves you already have (same time and date) are skipped, so importing the same file twice adds nothing. csTimer sessions go into Full Solve; a csTimer comment becomes a flagged note. Sessions this app exported from OLL / PLL go back there with their cases. Before importing, the database is copied to `cube_times.before-import-<date-time>.db`.
+
 ### Reading the case pictures
 
 Every picture is a top-down view of the last layer, held with yellow on top and green in front. In the gallery it shows the case as it looks at the moment you start the listed algorithm.
@@ -200,6 +210,7 @@ Averages (ao5, ao12, …) drop the best and worst 5% of the most recent *n* time
 | `cube_timer.py` | OLL and PLL case lists, scramble generator, database, averages, and the terminal app. |
 | `cube_timer_gui.py` | The desktop app. |
 | `cube_web.py` | The web app's server: serves `web/` and a JSON API over the database. |
+| `cube_io.py` | Export to CSV, a JSON backup and csTimer's format, and import of backups and csTimer files. |
 | `web/` | The web app's page: `index.html`, `style.css` and plain JavaScript modules in `web/js/` (no build step). |
 | `cube_diagram.py` | Cube simulator, the widget that draws case pictures, and case frequencies. |
 | `make_scrambles.py` | Two-phase cube solver that generates `case_scrambles.json`. |

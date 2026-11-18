@@ -487,6 +487,10 @@ class Database:
     def list_sessions(self, mode):
         """[(number, name, solve count, last solve ts or None)], oldest first."""
         self._ensure_session(mode, self.current_session(mode))
+        # sqlite3 opens a write transaction even for an ignored INSERT; never
+        # leave it open, or the other app (and backups) would wait on the lock
+        if self.conn.in_transaction:
+            self.conn.commit()
         return self.conn.execute("""
             SELECT l.number, l.name, COUNT(t.id), MAX(t.ts)
             FROM session_list l
@@ -501,6 +505,15 @@ class Database:
 
     def new_session(self, mode, name=None):
         """Create a session after every existing one and select it; returns its number."""
+        n = self.create_session(mode, name)
+        self.conn.execute(
+            "INSERT OR REPLACE INTO sessions (mode,current) VALUES (?,?)", (mode, n))
+        self.conn.commit()
+        log.info("%s: started session %d (%s)", mode, n, self.session_name(mode, n))
+        return n
+
+    def create_session(self, mode, name):
+        """Add a named session after every existing one without selecting it (imports)."""
         row = self.conn.execute("""
             SELECT MAX(n) FROM (
                 SELECT number AS n FROM session_list WHERE mode=?
@@ -510,10 +523,6 @@ class Database:
         n = (row[0] or 0) + 1
         self.conn.execute("INSERT INTO session_list (mode,number,name) VALUES (?,?,?)",
                           (mode, n, self._clean_name(name, n)))
-        self.conn.execute(
-            "INSERT OR REPLACE INTO sessions (mode,current) VALUES (?,?)", (mode, n))
-        self.conn.commit()
-        log.info("%s: started session %d (%s)", mode, n, self.session_name(mode, n))
         return n
 
     def select_session(self, mode, n):
@@ -724,6 +733,20 @@ class Database:
         )
         self.conn.commit()
         return cur.lastrowid
+
+    def add_imported(self, mode, session, case_name, seconds, penalty, flagged, note,
+                     scramble, ts):
+        """Insert an attempt from an import with its own session and date (no commit;
+        cube_io commits once at the end)."""
+        if penalty not in PENALTIES:
+            raise ValueError(f"unknown penalty {penalty!r}")
+        self._ensure_session(mode, session)
+        note = (note or "").strip()[:200] or None
+        self.conn.execute(
+            "INSERT INTO times (mode,case_name,seconds,scramble,ts,session,penalty,flagged,note) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (mode, case_name, seconds, scramble, ts, session, penalty,
+             1 if flagged else 0, note if flagged else None))
 
     # --- settings ----------------------------------------------------------------
     def get_settings(self):

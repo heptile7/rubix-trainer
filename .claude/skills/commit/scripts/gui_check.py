@@ -176,6 +176,23 @@ oll.timer_toggle(); t[0] += 1.2; oll.timer_toggle(); pump(3)
 check("practice attempt saved without penalty", newest("oll")[3] is None)
 oll.options._save("inspection.oll", False)
 
+# --- export / import ---
+st = app.screen("stats"); app.show_screen("stats"); pump()
+told = []
+st.tell = lambda msg: told.append(msg)
+out = tempfile.mkdtemp()
+for ext in ("csv", "json", "txt"):
+    st.export(os.path.join(out, f"export.{ext}"))
+check("export three formats", all(os.path.getsize(os.path.join(out, f"export.{e}")) > 20
+                                  for e in ("csv", "json", "txt")))
+st.confirm = lambda msg: True
+fixture = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "cstimer_sample.txt")
+summary = st.import_file(fixture)
+check("import csTimer file", summary and summary["added"] == 7
+      and "Fixture GAN" in [s[1] for s in db.list_sessions("full")], told[-1:])
+summary = st.import_file(os.path.join(out, "export.json"))
+check("re-import own backup adds nothing", summary and summary["added"] == 0)
+
 # --- progress chart ---
 app.show_screen("stats"); pump()
 st = app.screen("stats")

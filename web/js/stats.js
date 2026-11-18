@@ -59,6 +59,49 @@ function seg(values, onPick) {
   return { el, set };
 }
 
+/**
+ * Export (CSV / backup / csTimer downloads) and Import (a backup or a csTimer
+ * file; merged on the server after it copies the database), for the page head.
+ */
+function exportImport() {
+  const link = (href, text, title) => h("a.menu-item", { href, text, title, download: "" });
+  const menu = h("details.menu", null,
+    h("summary.btn", { text: "Export ▾" }),
+    h("div.menu-list", null,
+      link("/api/export/csv", "CSV (spreadsheet)", "Every solve, one row each"),
+      link("/api/export/backup", "Cube Timer backup", "Sessions, solves, selections and groups; import it here later"),
+      link("/api/export/cstimer?modes=full,oll,pll", "csTimer file", "Open in csTimer with Import from file")));
+  document.addEventListener("click", (e) => { if (!menu.contains(e.target)) menu.open = false; });
+  const file = h("input", { type: "file", accept: ".json,.txt,application/json,text/plain", hidden: true });
+  file.onchange = async () => {
+    const f = file.files[0];
+    file.value = "";
+    if (!f) return;
+    let data;
+    try { data = JSON.parse(await f.text()); } catch {
+      alert("That file isn't a Cube Timer backup or a csTimer export (it isn't JSON). CSV files can't be imported.");
+      return;
+    }
+    const cstimer = data && data.properties && Object.keys(data).some((k) => /^session\d+$/.test(k));
+    const what = data && data.app === "cube-timer" ? "this Cube Timer backup"
+      : cstimer ? "this csTimer file (its sessions go into Full Solve)" : null;
+    if (!what) { alert("That file is neither a Cube Timer backup nor a csTimer export."); return; }
+    if (!confirm(`Import ${what}?
+Solves you already have are skipped; nothing is replaced, and the database is copied first.`)) return;
+    const res = await fetch("/api/import", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data, mode: "full" }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) { alert(`Couldn't import: ${body.detail || res.statusText}`); return; }
+    alert(body.message);
+    location.reload();      // every screen reads the merged data afresh
+  };
+  const importBtn = h("button.btn", { type: "button", text: "Import…", title: "Merge a Cube Timer backup or a csTimer export",
+                                      onclick: () => file.click() });
+  return h("div.row.io", null, menu, importBtn, file);
+}
+
 export function statsScreen(store) {
   let mode = "full", scope = "session", view = "solves", flaggedOnly = false;
   let rows = [];
@@ -156,7 +199,8 @@ export function statsScreen(store) {
 
   const el = h("section.screen.stats-screen", null,
     h("div.page-head", null, h("h1", { text: "Statistics" }),
-      h("button.btn", { type: "button", text: "Refresh", onclick: () => show() })),
+      h("div.row", null, exportImport(),
+        h("button.btn", { type: "button", text: "Refresh", onclick: () => show() }))),
     h("div.tabs", null, tabs.el),
     summary.el,
     h("div.row.stats-filters", null, viewSeg.el, ...Object.values(pickers).map((p) => p.el), scopeSeg.el,

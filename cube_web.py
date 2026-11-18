@@ -56,10 +56,11 @@ check_dependencies()
 
 from fastapi import FastAPI, HTTPException, Request  # noqa: E402  (after the check above)
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import cube_io
 from cube_diagram import case_diagram, case_weight, scramble_state, state_diagram
 from cube_timer import (DNF, OLL_CASES, PENALTIES, PLL_CASES, Database, check_setting, effective,
                         setup_logging, setup_scramble)
@@ -73,6 +74,7 @@ CASES    = {"oll": OLL_CASES, "pll": PLL_CASES}
 MODES    = ("full", "oll", "pll")
 STATUSES = ("unlearned", "learning", "finished")
 HISTORY  = 100      # attempts of the current session sent for a screen's history
+IMPORT_MAX = 20 * 1024 * 1024   # largest import accepted, in bytes
 CASE_N   = 12       # times kept per case (result bar: last, best, ao5, ao12)
 
 
@@ -394,6 +396,56 @@ def create_app(db_path=DB_PATH):
         except ValueError as exc:
             raise HTTPException(400, str(exc))
         return times_after_change(mode, None)
+
+    # --- export / import (cube_io) ----------------------------------------
+    def export_modes(modes):
+        chosen = [m for m in (modes or "").split(",") if m] or list(MODES)
+        for m in chosen:
+            check_mode(m)
+        return chosen
+
+    def download(name, ext, content, media_type):
+        """An attachment called <name>-<yyyymmdd>.<ext>."""
+        filename = f"{name}-{time.strftime('%Y%m%d')}.{ext}"
+        return Response(content, media_type=media_type,
+                        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+    @app.get("/api/export/csv")
+    async def export_csv(modes: str = ""):
+        """Every attempt as CSV (one row per solve), for spreadsheets."""
+        return download("cube-times", "csv", cube_io.export_csv(db, export_modes(modes)), "text/csv; charset=utf-8")
+
+    @app.get("/api/export/backup")
+    async def export_backup():
+        """This app's own JSON backup: sessions, attempts, selections, statuses, groups."""
+        return download("cube-timer-backup", "json", json.dumps(jsonable(cube_io.export_backup(db))),
+                        "application/json")
+
+    @app.get("/api/export/cstimer")
+    async def export_cstimer(modes: str = "full"):
+        """csTimer's export file (import it in csTimer with "Import from file")."""
+        # csTimer's own export files are .txt
+        return download("cube-timer-cstimer", "txt",
+                        json.dumps(cube_io.export_cstimer(db, export_modes(modes))), "text/plain")
+
+    @app.post("/api/import")
+    async def import_file(request: Request):
+        """Merge a Cube Timer backup or a csTimer export: {data, mode?}. Copies the
+        database first; never replaces anything."""
+        if int(request.headers.get("content-length") or 0) > IMPORT_MAX:
+            raise HTTPException(413, "That file is too big to import (over 20 MB).")
+        try:
+            body = await request.json()
+        except ValueError:
+            raise HTTPException(400, "The file isn't valid JSON.")
+        mode = body.get("mode") or "full"
+        check_mode(mode)
+        try:
+            summary = cube_io.import_any(db, body.get("data"), mode=mode, case_names=names)
+        except cube_io.ImportProblem as exc:
+            raise HTTPException(400, str(exc))
+        log.info("import: %s", summary)
+        return {**summary, "message": cube_io.summary_text(summary)}
 
     @app.get("/api/settings")
     async def get_settings():

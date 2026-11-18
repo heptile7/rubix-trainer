@@ -1,6 +1,8 @@
 __pycache__/
 # copy of the database made before it gained the session columns (Database._add_solve_columns)
 *.before-sessions.db
+# copies made before each import (cube_io.backup_before_import)
+*.before-import-*.db
 *.pyc
 pytest-cache-files-*/
 
