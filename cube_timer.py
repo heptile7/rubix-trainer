@@ -379,8 +379,29 @@ class Database:
                 current INTEGER NOT NULL
             )
         """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS session_list (
+                mode    TEXT    NOT NULL,
+                number  INTEGER NOT NULL,
+                name    TEXT    NOT NULL,
+                created TEXT    DEFAULT (datetime('now','localtime')),
+                PRIMARY KEY (mode, number)
+            )
+        """)
         self._add_solve_columns()
+        self._add_session_names()
         self.conn.commit()
+
+    def _add_session_names(self):
+        """Name every session that has times or is selected but has no name yet."""
+        cur = self.conn.execute("""
+            INSERT OR IGNORE INTO session_list (mode, number, name)
+            SELECT mode, n, 'Session ' || n FROM (
+                SELECT DISTINCT mode, session AS n FROM times
+                UNION SELECT mode, current FROM sessions)
+        """)
+        if cur.rowcount > 0:
+            log.info("named %d existing session(s)", cur.rowcount)
 
     def _add_solve_columns(self):
         """Give an older database the penalty / flag / note / session columns."""
@@ -407,19 +428,93 @@ class Database:
         log.info("added columns %s to times (%d rows)", [n for n, _ in new], count)
 
     # --- sessions -----------------------------------------------------------
+    # Each mode has a list of named sessions (session_list) and one selected
+    # session (sessions.current). New attempts go into the selected session,
+    # and "session" stats and histories cover it.
+    SESSION_NAME_MAX = 40
+
     def current_session(self, mode):
+        """Number of the selected session in this mode."""
         row = self.conn.execute(
             "SELECT current FROM sessions WHERE mode=?", (mode,)).fetchone()
         return row[0] if row else 1
 
-    def new_session(self, mode):
-        """Start the next session in this mode; returns its number."""
-        n = self.current_session(mode) + 1
+    def _ensure_session(self, mode, n):
+        self.conn.execute(
+            "INSERT OR IGNORE INTO session_list (mode,number,name) VALUES (?,?,?)",
+            (mode, n, f"Session {n}"))
+
+    def _clean_name(self, name, n):
+        return (name or "").strip()[:self.SESSION_NAME_MAX].strip() or f"Session {n}"
+
+    def list_sessions(self, mode):
+        """[(number, name, solve count, last solve ts or None)], oldest first."""
+        self._ensure_session(mode, self.current_session(mode))
+        return self.conn.execute("""
+            SELECT l.number, l.name, COUNT(t.id), MAX(t.ts)
+            FROM session_list l
+            LEFT JOIN times t ON t.mode = l.mode AND t.session = l.number
+            WHERE l.mode = ? GROUP BY l.number ORDER BY l.number""", (mode,)).fetchall()
+
+    def session_name(self, mode, n=None):
+        n = self.current_session(mode) if n is None else n
+        row = self.conn.execute("SELECT name FROM session_list WHERE mode=? AND number=?",
+                                (mode, n)).fetchone()
+        return row[0] if row else f"Session {n}"
+
+    def new_session(self, mode, name=None):
+        """Create a session after every existing one and select it; returns its number."""
+        row = self.conn.execute("""
+            SELECT MAX(n) FROM (
+                SELECT number AS n FROM session_list WHERE mode=?
+                UNION SELECT session FROM times WHERE mode=?
+                UNION SELECT current FROM sessions WHERE mode=?)""",
+                                (mode, mode, mode)).fetchone()
+        n = (row[0] or 0) + 1
+        self.conn.execute("INSERT INTO session_list (mode,number,name) VALUES (?,?,?)",
+                          (mode, n, self._clean_name(name, n)))
         self.conn.execute(
             "INSERT OR REPLACE INTO sessions (mode,current) VALUES (?,?)", (mode, n))
         self.conn.commit()
-        log.info("%s: started session %d", mode, n)
+        log.info("%s: started session %d (%s)", mode, n, self.session_name(mode, n))
         return n
+
+    def select_session(self, mode, n):
+        """Make an existing session the one new attempts go into."""
+        if not self.conn.execute("SELECT 1 FROM session_list WHERE mode=? AND number=?",
+                                 (mode, n)).fetchone():
+            raise KeyError(f"no session {n} in {mode}")
+        self.conn.execute(
+            "INSERT OR REPLACE INTO sessions (mode,current) VALUES (?,?)", (mode, n))
+        self.conn.commit()
+        log.info("%s: selected session %d", mode, n)
+
+    def rename_session(self, mode, n, name):
+        self._ensure_session(mode, n)
+        self.conn.execute("UPDATE session_list SET name=? WHERE mode=? AND number=?",
+                          (self._clean_name(name, n), mode, n))
+        self.conn.commit()
+        log.info("%s: session %d renamed to %r", mode, n, self.session_name(mode, n))
+
+    def delete_session(self, mode, n):
+        """
+        Delete a session and its attempts; returns how many attempts went.
+        The last session of a mode can't be deleted. Deleting the selected one
+        selects the newest remaining session.
+        """
+        numbers = [r[0] for r in self.list_sessions(mode)]
+        if n not in numbers:
+            raise KeyError(f"no session {n} in {mode}")
+        if len(numbers) == 1:
+            raise ValueError("the last session can't be deleted")
+        cur = self.conn.execute("DELETE FROM times WHERE mode=? AND session=?", (mode, n))
+        self.conn.execute("DELETE FROM session_list WHERE mode=? AND number=?", (mode, n))
+        if self.current_session(mode) == n:
+            self.conn.execute("INSERT OR REPLACE INTO sessions (mode,current) VALUES (?,?)",
+                              (mode, max(x for x in numbers if x != n)))
+        self.conn.commit()
+        log.info("%s: deleted session %d with %d attempt(s)", mode, n, cur.rowcount)
+        return cur.rowcount
 
     # --- single solves ----------------------------------------------------------
     def solves(self, mode, scope="all", case_name=None, flagged_only=False, limit=None):
@@ -578,10 +673,12 @@ class Database:
         return [(c, effective(s, p), ts) for c, s, p, ts in cur]
 
     def add(self, mode, seconds, case_name=None, scramble=None):
-        """Record an attempt in the current session; returns its id."""
+        """Record an attempt in the selected session; returns its id."""
+        session = self.current_session(mode)
+        self._ensure_session(mode, session)
         cur = self.conn.execute(
             "INSERT INTO times (mode,case_name,seconds,scramble,session) VALUES (?,?,?,?,?)",
-            (mode, case_name, seconds, scramble, self.current_session(mode)),
+            (mode, case_name, seconds, scramble, session),
         )
         self.conn.commit()
         return cur.lastrowid
@@ -612,15 +709,18 @@ class Database:
         return cur.fetchall()
 
     def delete_last(self, mode, case_name=None):
+        """Delete the newest attempt of the selected session (optionally of one case)."""
+        session = self.current_session(mode)
         if case_name:
             cur = self.conn.execute(
-                "SELECT id FROM times WHERE mode=? AND case_name=? ORDER BY rowid DESC LIMIT 1",
-                (mode, case_name),
+                "SELECT id FROM times WHERE mode=? AND session=? AND case_name=? "
+                "ORDER BY rowid DESC LIMIT 1",
+                (mode, session, case_name),
             )
         else:
             cur = self.conn.execute(
-                "SELECT id FROM times WHERE mode=? ORDER BY rowid DESC LIMIT 1",
-                (mode,),
+                "SELECT id FROM times WHERE mode=? AND session=? ORDER BY rowid DESC LIMIT 1",
+                (mode, session),
             )
         row = cur.fetchone()
         if row:

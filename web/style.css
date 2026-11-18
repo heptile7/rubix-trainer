@@ -261,8 +261,9 @@ table.stats td.acts .btn { height: 22px; padding: 0 6px; margin-left: 2px; font-
 .btn.small.on { background: var(--accent); }
 .session-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .session-panel .stat-block { align-self: flex-start; }
-.session-head { display: flex; align-items: center; justify-content: space-between; margin: 0 6px 4px; }
-.session-title { font-weight: 700; font-size: 14px; }
+.session-picker { display: flex; align-items: center; gap: 4px; margin: 0 6px 6px; flex-wrap: wrap; }
+.session-picker select { flex: 1; min-width: 120px; max-width: 260px; font-weight: 700; }
+.stats-filters .session-picker { margin: 0; }
 table.stat-block { border-collapse: collapse; font-size: 12px; margin: 0 6px 4px; }
 table.stat-block th, table.stat-block td { padding: 1px 18px 1px 0; text-align: left; white-space: nowrap; }
 table.stat-block thead th { color: #b3b3b3; border-bottom: 1px solid #444; padding-bottom: 3px; }

@@ -125,6 +125,10 @@ class PenaltyChange(BaseModel):
     penalty: str | None = None      # None, "+2" or "dnf"
 
 
+class SessionName(BaseModel):
+    name: str | None = None
+
+
 class FlagChange(BaseModel):
     flagged: bool
     note: str | None = None
@@ -208,7 +212,11 @@ def create_app(db_path=DB_PATH):
         return [solve_json(r) for r in db.solves(mode, "session", limit=HISTORY)]
 
     def stats(mode):
+        """Stats of the selected session and of all time, plus the session list."""
         return {"session_no": db.current_session(mode),
+                "session_name": db.session_name(mode),
+                "sessions":   [{"n": n, "name": name, "count": count, "last": last}
+                               for n, name, count, last in db.list_sessions(mode)],
                 "session":    jsonable(db.stats(mode, "session")),
                 "all":        jsonable(db.stats(mode))}
 
@@ -288,10 +296,11 @@ def create_app(db_path=DB_PATH):
 
     @app.delete("/api/times/last/{mode}")
     async def delete_last(mode: str):
-        """Remove the newest attempt in a mode (the top row of the history)."""
+        """Remove the newest attempt of the selected session (the top row of the history)."""
         check_mode(mode)
-        row = db.conn.execute("SELECT case_name FROM times WHERE mode=? "
-                              "ORDER BY rowid DESC LIMIT 1", (mode,)).fetchone()
+        row = db.conn.execute("SELECT case_name FROM times WHERE mode=? AND session=? "
+                              "ORDER BY rowid DESC LIMIT 1",
+                              (mode, db.current_session(mode))).fetchone()
         if not row or not db.delete_last(mode):
             return {"deleted": False, **times_after_change(mode, None)}
         return {"deleted": True, **times_after_change(mode, row[0])}
@@ -340,10 +349,38 @@ def create_app(db_path=DB_PATH):
         return times_after_change(mode, case)
 
     @app.post("/api/session/{mode}")
-    async def new_session(mode: str):
-        """Start a new session: the session stats and history begin again."""
+    async def new_session(mode: str, body: SessionName | None = None):
+        """Create a named session after the others and select it."""
         check_mode(mode)
-        db.new_session(mode)
+        db.new_session(mode, body.name if body else None)
+        return times_after_change(mode, None)
+
+    def check_session(mode, n):
+        check_mode(mode)
+        if n not in {s[0] for s in db.list_sessions(mode)}:
+            raise HTTPException(404, f"no session {n} in {mode}")
+
+    @app.put("/api/session/{mode}/{n}")
+    async def select_session(mode: str, n: int):
+        """Select a session: new attempts go into it, and its history and stats show."""
+        check_session(mode, n)
+        db.select_session(mode, n)
+        return times_after_change(mode, None)
+
+    @app.patch("/api/session/{mode}/{n}")
+    async def rename_session(mode: str, n: int, body: SessionName):
+        check_session(mode, n)
+        db.rename_session(mode, n, body.name)
+        return times_after_change(mode, None)
+
+    @app.delete("/api/session/{mode}/{n}")
+    async def delete_session(mode: str, n: int):
+        """Delete a session and its attempts (not the last session of a mode)."""
+        check_session(mode, n)
+        try:
+            db.delete_session(mode, n)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
         return times_after_change(mode, None)
 
     @app.get("/api/summary/{mode}")

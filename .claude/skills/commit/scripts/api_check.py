@@ -90,9 +90,32 @@ with TestClient(app) as c:
     st = c.get("/api/stats/full").json()
     check("session ao5", st["session"]["ao5"] is not None, st["session"]["ao5"])
     all_before = st["all"]["count"]
-    r = c.post("/api/session/full").json()
-    check("new session", r["stats"]["session"]["count"] == 0 and r["recent"] == []
-          and r["stats"]["all"]["count"] == all_before and r["stats"]["session_no"] == st["session_no"] + 1)
+    old_n = st["session_no"]
+    r = c.post("/api/session/full", json={"name": "  GAN 12 "}).json()
+    new_n = r["stats"]["session_no"]
+    check("new named session", r["stats"]["session"]["count"] == 0 and r["recent"] == []
+          and r["stats"]["all"]["count"] == all_before and new_n > old_n
+          and r["stats"]["session_name"] == "GAN 12"
+          and {"n": new_n, "name": "GAN 12", "count": 0, "last": None} in r["stats"]["sessions"])
+    c.post("/api/times", json={"mode": "full", "seconds": 20.0})
+    r = c.put(f"/api/session/full/{old_n}").json()
+    check("select earlier session", r["stats"]["session_no"] == old_n
+          and r["stats"]["session"]["count"] == st["session"]["count"]
+          and all(x["seconds"] != 20.0 for x in r["recent"]))
+    r = c.delete("/api/times/last/full").json()
+    left = {s["n"]: s["count"] for s in r["stats"]["sessions"]}
+    check("delete last stays in the selected session", r["deleted"] and left[new_n] == 1
+          and left[old_n] == st["session"]["count"] - 1)
+    r = c.patch(f"/api/session/full/{new_n}", json={"name": "MoYu OH"}).json()
+    check("rename session", any(s["n"] == new_n and s["name"] == "MoYu OH" for s in r["stats"]["sessions"]))
+    check("unknown session 404", c.put("/api/session/full/9999").status_code == 404)
+    r = c.delete(f"/api/session/full/{new_n}").json()
+    check("delete session and its solves", all(s["n"] != new_n for s in r["stats"]["sessions"])
+          and r["stats"]["all"]["count"] == all_before - 1)
+    only = c.get("/api/stats/pll").json()
+    if len(only["sessions"]) == 1:
+        check("last session can't be deleted",
+              c.delete(f"/api/session/pll/{only['session_no']}").status_code == 400)
     r = c.delete(f"/api/solves/{oll_id}").json()
     check("delete any solve", r["case"] == "OLL 21" and c.delete(f"/api/solves/{oll_id}").status_code == 404)
     r = c.post("/api/times", json={"mode": "oll", "case": "OLL 21", "seconds": 3.21}).json()

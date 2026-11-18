@@ -321,11 +321,111 @@ class StatsBlock(tk.Frame):
             pair[1].grid(row=i, column=2, sticky="w")
             self.cells.append(pair)
 
-    def update_stats(self, session_no, session, all_time):
-        self.session_head.configure(text=f"Session {session_no}")
+    def update_stats(self, session_name, session, all_time):
+        self.session_head.configure(text=session_name)
         for (key, _), (a, b) in zip(self.rows, self.cells):
             a.configure(text=stat_text(session, key))
             b.configure(text=stat_text(all_time, key))
+
+
+class SessionPicker(ctk.CTkFrame):
+    """
+    The named sessions of one mode: a menu that selects one (new attempts go
+    into it) and New / Rename / Delete. on_change() runs after any change.
+    ask_name(prompt) (None = cancelled), confirm(message) and tell(message)
+    can be replaced in tests.
+    """
+
+    def __init__(self, parent, db, mode, title, on_change=None):
+        super().__init__(parent, fg_color="transparent")
+        self.db        = db
+        self.mode      = mode
+        self.title     = title
+        self.on_change = on_change
+        self.ask_name  = lambda prompt: ctk.CTkInputDialog(title="Session", text=prompt).get_input()
+        self.confirm   = lambda msg: messagebox.askyesno("Session", msg)
+        self.tell      = lambda msg: messagebox.showinfo("Session", msg)
+        self._numbers  = {}            # menu label -> session number
+        self._shown    = None
+
+        self.grid_columnconfigure(0, weight=1)
+        self.menu = ctk.CTkOptionMenu(self, values=[""], height=28, dynamic_resizing=False,
+                                      font=ctk.CTkFont(size=13, weight="bold"),
+                                      command=self._on_pick)
+        self.menu.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        for col, (text, cmd, width) in enumerate(
+                [("New…", self.new_session, 52), ("Rename…", self.rename_session, 70),
+                 ("Delete…", self.delete_session, 62)], start=1):
+            ctk.CTkButton(self, text=text, width=width, height=26, font=ctk.CTkFont(size=12),
+                          fg_color="gray30", hover_color="#6B0000" if text == "Delete…" else "gray40",
+                          command=cmd).grid(row=0, column=col, padx=1)
+
+    def set_mode(self, mode, title):
+        self.mode, self.title, self._shown = mode, title, None
+        self.refresh()
+
+    def refresh(self):
+        sessions = self.db.list_sessions(self.mode)
+        current = self.db.current_session(self.mode)
+        state = (self.mode, current, tuple(sessions))
+        if state == self._shown:
+            return
+        self._shown = state
+        self._numbers = {}
+        for n, name, count, _last in sessions:
+            label = f"{name}  ({count})"
+            if label in self._numbers:
+                label += f"  #{n}"
+            self._numbers[label] = n
+        self.menu.configure(values=list(self._numbers))
+        self.menu.set(next(l for l, n in self._numbers.items() if n == current))
+
+    def _on_pick(self, label):
+        n = self._numbers.get(label)
+        if n is not None and n != self.db.current_session(self.mode):
+            self.select(n)
+
+    def select(self, n):
+        self.db.select_session(self.mode, n)
+        self._changed()
+
+    def new_session(self):
+        numbers = [s[0] for s in self.db.list_sessions(self.mode)]
+        name = self.ask_name(f"Name for the new {self.title} session (e.g. the cube you use):")
+        if name is None:
+            return None
+        n = self.db.new_session(self.mode, name or f"Session {max(numbers) + 1}")
+        self._changed()
+        return n
+
+    def rename_session(self):
+        n = self.db.current_session(self.mode)
+        name = self.ask_name(f"New name for “{self.db.session_name(self.mode, n)}”:")
+        if not name or not name.strip():
+            return False
+        self.db.rename_session(self.mode, n, name)
+        self._changed()
+        return True
+
+    def delete_session(self):
+        sessions = self.db.list_sessions(self.mode)
+        if len(sessions) < 2:
+            self.tell("This is the only session, so it can't be deleted.")
+            return False
+        n = self.db.current_session(self.mode)
+        count = next(s[2] for s in sessions if s[0] == n)
+        what = f"Delete the session “{self.db.session_name(self.mode, n)}”"
+        if not self.confirm(what + (f" and its {count} solve(s)?\nThey are removed from every "
+                                    "statistic." if count else "?")):
+            return False
+        self.db.delete_session(self.mode, n)
+        self._changed()
+        return True
+
+    def _changed(self):
+        self.refresh()
+        if self.on_change:
+            self.on_change()
 
 
 class SessionPanel(ctk.CTkFrame):
@@ -344,7 +444,6 @@ class SessionPanel(ctk.CTkFrame):
         self.show_case = show_case
         self.on_change = on_change
         self.actions   = SolveActions(db, self._changed)
-        self.confirm   = lambda msg: messagebox.askyesno("New session", msg)
         self._selected = None            # solve id picked in the history
         self._rows     = []              # the session's solves, newest first
         self._labels   = {}              # solve id -> its row's labels
@@ -352,14 +451,8 @@ class SessionPanel(ctk.CTkFrame):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(3, weight=1)
 
-        head = ctk.CTkFrame(self, fg_color="transparent")
-        head.grid(row=0, column=0, padx=8, pady=(4, 2), sticky="ew")
-        head.grid_columnconfigure(0, weight=1)
-        self.title_label = ctk.CTkLabel(head, text="", font=ctk.CTkFont(size=14, weight="bold"))
-        self.title_label.grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(head, text="New session", width=96, height=26, font=ctk.CTkFont(size=12),
-                      fg_color="gray30", hover_color="gray40",
-                      command=self.new_session).grid(row=0, column=1)
+        self.picker = SessionPicker(self, db, mode, title, on_change=self._session_changed)
+        self.picker.grid(row=0, column=0, padx=8, pady=(4, 4), sticky="ew")
 
         self.stats = StatsBlock(self, bg=C_PANEL, compact=True)
         self.stats.grid(row=1, column=0, padx=10, pady=(0, 4), sticky="w")
@@ -383,8 +476,8 @@ class SessionPanel(ctk.CTkFrame):
     def refresh(self):
         db, mode = self.db, self.mode
         self._rows = db.solves(mode, "session", limit=HISTORY)
-        self.title_label.configure(text=f"Session {db.current_session(mode)}")
-        self.stats.update_stats(db.current_session(mode), db.stats(mode, "session"),
+        self.picker.refresh()
+        self.stats.update_stats(db.session_name(mode), db.stats(mode, "session"),
                                 db.stats(mode))
         if self._selected not in {r[0] for r in self._rows}:
             self._selected = None
@@ -447,16 +540,10 @@ class SessionPanel(ctk.CTkFrame):
     def _on_action(self, action):
         self.actions.run(self.selected_solve(), action)
 
-    def new_session(self):
-        n = self.db.stats(self.mode, "session")["count"]
-        if n and not self.confirm(
-                f"Start a new {self.title} session?\n"
-                f"The {n} solve(s) of this session stay in the all-time statistics."):
-            return False
-        self.db.new_session(self.mode)
+    def _session_changed(self):
+        """Another session was selected, made, renamed or deleted."""
         self._selected = None
         self._changed()
-        return True
 
     def _changed(self):
         self.refresh()
@@ -1733,6 +1820,9 @@ class StatsScreen(ctk.CTkFrame):
         self.flagged_only = ctk.CTkCheckBox(bar, text="Flagged only", width=110,
                                             command=lambda: self._set())
         self.flagged_only.grid(row=0, column=2)
+        self.session_picker = SessionPicker(bar, self.db, self._mode, "Full Solve",
+                                            on_change=self._set)
+        self.session_picker.grid(row=1, column=0, columnspan=3, pady=(6, 0), sticky="w")
 
         self.stats_block = StatsBlock(tab, bg=tab.cget("fg_color")[1]
                                       if isinstance(tab.cget("fg_color"), (list, tuple))
@@ -1798,11 +1888,16 @@ class StatsScreen(ctk.CTkFrame):
     # ------------------------------------------------------------------
     def _build_solves(self):
         db, mode, scope = self.db, self._mode, self._scope
-        self.stats_block.update_stats(db.current_session(mode), db.stats(mode, "session"),
+        titles = {v: k for k, v in self.MODES.items()}
+        if self.session_picker.mode != mode:
+            self.session_picker.set_mode(mode, titles[mode])
+        else:
+            self.session_picker.refresh()
+        self.stats_block.update_stats(db.session_name(mode), db.stats(mode, "session"),
                                       db.stats(mode))
         flagged = bool(self.flagged_only.get())
         self._rows, total = db.solve_table(mode, scope, flagged_only=flagged, limit=self.LIMIT)
-        where = f"session {db.current_session(mode)}" if scope == "session" else "all"
+        where = f"“{db.session_name(mode)}”" if scope == "session" else "all"
         shown = f"Latest {self.LIMIT} shown; " if len(self._rows) >= self.LIMIT else ""
         self.table_note.configure(text=f"{shown}{total} solve(s) in {where}.  "
                                        "Click a row to pick it for the buttons above.")

@@ -222,8 +222,22 @@ export class Store {
     this.applyTimes(mode, null, await api.deleteSolve(id));
   }
 
-  /** Start a new session in this mode: its history and session stats begin again. */
-  async newSession(mode) {
-    this.applyTimes(mode, null, await api.newSession(mode));
+  /** Create a named session after the others and select it. */
+  async newSession(mode, name = null) {
+    this.applyTimes(mode, null, await api.newSession(mode, name));
+  }
+
+  /** Select session n: new attempts go into it, and its history and stats show. */
+  async selectSession(mode, n) {
+    this.applyTimes(mode, null, await api.selectSession(mode, n));
+  }
+
+  async renameSession(mode, n, name) {
+    this.applyTimes(mode, null, await api.renameSession(mode, n, name));
+  }
+
+  /** Delete session n and its attempts (the server refuses the last one). */
+  async deleteSession(mode, n) {
+    this.applyTimes(mode, null, await api.deleteSession(mode, n));
   }
 }

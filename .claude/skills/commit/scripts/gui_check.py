@@ -119,10 +119,27 @@ panel.actions.confirm = lambda msg: True
 panel.buttons.buttons["delete"].invoke(); pump()
 check("delete selected solve", db.solve(second) is None)
 all_n = db.stats("full")["count"]
-panel.confirm = lambda msg: True
-panel.new_session(); pump()
-check("new session", db.stats("full", "session")["count"] == 0 and db.stats("full")["count"] == all_n
-      and not panel._rows)
+old_n = db.current_session("full")
+pick = panel.picker
+pick.ask_name = lambda prompt: "GUI Check Cube"
+pick.new_session(); pump()
+check("new named session", db.stats("full", "session")["count"] == 0 and db.stats("full")["count"] == all_n
+      and db.session_name("full") == "GUI Check Cube" and not panel._rows
+      and pick.menu.get().startswith("GUI Check Cube"))
+new_n = db.current_session("full")
+full.timer_toggle(); pump(3); time.sleep(0.12); full.timer_toggle(); pump(3); full.timer_toggle(); pump(3)
+label = next(l for l, n in pick._numbers.items() if n == old_n)
+pick._on_pick(label); pump()
+check("switch back to the earlier session", db.current_session("full") == old_n
+      and len(panel._rows) == db.stats("full", "session")["count"])
+pick.ask_name = lambda prompt: "Renamed"
+pick.rename_session(); pump()
+check("rename session", db.session_name("full", old_n) == "Renamed")
+pick.select(new_n); pump()
+pick.confirm = lambda msg: True
+pick.delete_session(); pump()
+check("delete session", new_n not in [s[0] for s in db.list_sessions("full")]
+      and db.current_session("full") != new_n and db.stats("full")["count"] == all_n)
 st = app.screen("stats"); app.show_screen("stats"); pump()
 st._set(scope="all"); pump()
 check("stats all-time rows", len(st._rows) >= 1)

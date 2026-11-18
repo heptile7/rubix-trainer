@@ -100,7 +100,7 @@ Two small differences in the web app:
 
 ### Sessions, penalties and flags
 
-Full Solve, OLL and PLL each have their own **session**. Every attempt goes into the current one. **New session** (at the top of the session column) starts the next session: its stats and history begin again, and the earlier solves stay in the **all-time** stats. The stats are: number of solves (and DNFs), best, worst, mean, the current ao5 / ao12 / ao50 / ao100, and the best ao5 and ao12.
+Full Solve, OLL and PLL each keep their own list of named **sessions**, for example one per cube (*GAN 12*, *MoYu OH*). The menu at the top of the session column picks the session that new solves go into; its history and stats show below, next to the **all-time** stats of every session together. **New…** creates a session (asking for a name), **Rename…** renames the selected one, and **Delete…** deletes it with its solves (after asking; the last session can't be deleted). Statistics has the same menu. **Delete Last** only removes solves from the selected session. The stats are: number of solves (and DNFs), best, worst, mean, the current ao5 / ao12 / ao50 / ao100, and the best ao5 and ao12.
 
 - **Under the timer**, *Last solve* has **OK / +2 / DNF / ⚑ Flag** for the attempt you just did.
 - **In the history**, click any solve to fix it: **+2** adds two seconds, **DNF** marks it as not finished, **OK** clears the penalty, **✕** deletes it (for a mis-start or any solve that shouldn't count). Click the same button again to undo a penalty.
@@ -134,7 +134,7 @@ The picker column and the gallery grow with the window: maximise it for bigger p
 
 **Statuses:** mark each case *Unlearned*, *Learning* or *Finished*, either with the **This case** buttons on the practice page or by clicking the status under a card in the gallery (it cycles). Statuses are saved.
 
-The **History** tab shows the current session in that mode: its stats, **New session**, and its latest 100 attempts (see *Sessions, penalties and flags*).
+The **History** tab shows the selected session in that mode: the session menu, its stats, and its latest 100 attempts (see *Sessions, penalties and flags*).
 
 **Show algorithm** hides the algorithm so you have to recall it; the picture stays.
 
@@ -167,7 +167,7 @@ Pick a mode from the menu. Full Solve shows a scramble. OLL and PLL practice sho
 
 Times (with their penalty, flag, note and session), your selected practice sets, case statuses and your own groups are stored in `cube_times.db`, created next to the scripts on first run. All three apps read and write the same file (see *Use one at a time* above). The terminal app records times only; it does not use the selected sets, statuses, groups, case scrambles or sessions, but its averages do apply +2 and DNF. Delete it to start over; copy it to back up your history.
 
-The first time a newer version opens an older `cube_times.db`, it adds the penalty / flag / note / session columns. Before doing so it saves a copy of the old file as `cube_times.before-sessions.db`; your existing times all go into session 1.
+The first time a newer version opens an older `cube_times.db`, it adds the penalty / flag / note / session columns. Before doing so it saves a copy of the old file as `cube_times.before-sessions.db`; your existing times all go into session 1. Sessions that existed before names were added are called *Session N*; rename them as you like.
 
 The apps write a log to `cube_timer.log` (next to the scripts, rotated at 512 KB): startup time, each saved attempt, status and group changes, and any errors (for the web app, also errors in the browser page). Set the environment variable `CUBE_TIMER_DEBUG=1` before starting it to also log every selection change. The log is not committed to git.
 

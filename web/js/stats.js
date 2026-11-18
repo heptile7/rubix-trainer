@@ -6,7 +6,7 @@
 
 import { api } from "./api.js";
 import { h, fmt, fmtSolve } from "./util.js";
-import { statsBlock, solveAction, timeClass } from "./solves.js";
+import { statsBlock, solveAction, timeClass, sessionPicker } from "./solves.js";
 
 const LIMIT = 200;      // rows listed at most (the stats cover every solve)
 
@@ -71,6 +71,9 @@ export function statsScreen(store) {
   const viewSeg = seg([["solves", "Solves"], ["cases", "Cases"]], (k) => { view = k; show(); });
   const flagBox = h("input", { type: "checkbox", onchange: () => { flaggedOnly = flagBox.checked; show(); } });
   tabs.set(mode); scopeSeg.set(scope); viewSeg.set(view); viewSeg.el.hidden = true;
+  // one session picker per mode; the open mode's is shown
+  const titles = { full: "Full Solve", oll: "OLL", pll: "PLL" };
+  const pickers = Object.fromEntries(Object.keys(titles).map((m) => [m, sessionPicker(store, m, { title: titles[m] })]));
 
   body.addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-act]");
@@ -86,6 +89,7 @@ export function statsScreen(store) {
   async function show() {
     const t = ++token;
     summary.update(store.stats[mode]);
+    for (const [m, p] of Object.entries(pickers)) { p.el.hidden = m !== mode; if (m === mode) p.refresh(); }
     try {
       let html;
       if (mode !== "full" && view === "cases") {
@@ -95,7 +99,9 @@ export function statsScreen(store) {
         const r = await api.solves(mode, scope, flaggedOnly, LIMIT);
         if (t !== token) return;
         rows = r.rows;
-        store.stats[mode] = { session_no: r.session_no, session: r.session, all: r.all };
+        const { rows: _rows, total: _total, ...fresh } = r;
+        store.stats[mode] = fresh;
+        pickers[mode].refresh();
         summary.update(store.stats[mode]);
         const best = (scope === "session" ? r.session : r.all).best;
         html = solveTable(mode, rows, best);
@@ -114,7 +120,7 @@ export function statsScreen(store) {
       h("button.btn", { type: "button", text: "Refresh", onclick: () => show() })),
     h("div.tabs", null, tabs.el),
     summary.el,
-    h("div.row.stats-filters", null, viewSeg.el, scopeSeg.el,
+    h("div.row.stats-filters", null, viewSeg.el, ...Object.values(pickers).map((p) => p.el), scopeSeg.el,
       h("label.switch", null, flagBox, "Flagged only")),
     note,
     body);

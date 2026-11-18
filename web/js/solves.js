@@ -26,7 +26,8 @@ export function statsBlock({ compact = false } = {}) {
     h("thead", null, h("tr", null, h("th"), sessionHead, h("th", { text: "All time" }))),
     h("tbody", null, ...rows.map(([, label], i) => h("tr", null, h("th", { text: label }), ...cells[i]))));
   function update(stats) {
-    sessionHead.textContent = `Session ${stats.session_no}`;
+    sessionHead.textContent = stats.session_name || `Session ${stats.session_no}`;
+    sessionHead.title = "The selected session";
     rows.forEach(([key], i) => {
       cells[i][0].textContent = statValue(stats.session, key);
       cells[i][1].textContent = statValue(stats.all, key);
@@ -79,20 +80,56 @@ export function actionButtons(solve, { labels = true } = {}) {
 export const timeClass = (solve) => (solve.penalty === "dnf" ? "dnf" : solve.penalty === "+2" ? "plus2" : "");
 
 /**
- * The current session: header with New session, stats, and the history.
+ * Session picker: a select of the mode's named sessions plus New / Rename /
+ * Delete. Picking one selects it on the server (new attempts go into it).
+ * onChange runs before each change (e.g. to close an open action bar).
+ */
+export function sessionPicker(store, mode, { title, onChange = () => {} }) {
+  const select = h("select.session-select", { title: "Session: new solves go into the selected one" });
+  select.onchange = () => { onChange(); select.blur(); store.selectSession(mode, Number(select.value)); };
+  const small = (text, tip, onclick) => h("button.btn.small", { type: "button", text, title: tip, onclick });
+  const el = h("div.session-picker", null, select,
+    small("New…", "Start a new session (e.g. one per cube)", async () => {
+      const st = store.stats[mode];
+      const name = prompt(`Name for the new ${title} session (e.g. the cube you use):`, `Session ${Math.max(...st.sessions.map((s) => s.n)) + 1}`);
+      if (name === null) return;
+      onChange();
+      await store.newSession(mode, name);
+    }),
+    small("Rename…", "Rename this session", async () => {
+      const st = store.stats[mode];
+      const name = prompt("New name for this session:", st.session_name);
+      if (name === null || !name.trim()) return;
+      await store.renameSession(mode, st.session_no, name);
+    }),
+    small("Delete…", "Delete this session and its solves", async () => {
+      const st = store.stats[mode];
+      if (st.sessions.length < 2) { alert("This is the only session, so it can't be deleted."); return; }
+      const n = st.session.count;
+      if (!confirm(`Delete the session “${st.session_name}”` +
+                   (n ? ` and its ${n} solve(s)? They are removed from every statistic.` : "?"))) return;
+      onChange();
+      await store.deleteSession(mode, st.session_no);
+    }));
+
+  let shownKey = "";
+  function refresh() {
+    const st = store.stats[mode];
+    const key = JSON.stringify([st.session_no, st.sessions]);
+    if (key === shownKey) return;
+    shownKey = key;
+    select.replaceChildren(...st.sessions.map((s) =>
+      h("option", { value: s.n, text: `${s.name}  (${s.count})`, selected: s.n === st.session_no })));
+  }
+  return { el, refresh };
+}
+
+/**
+ * The selected session: its picker, stats, and the history.
  * Clicking a solve opens its action bar (one delegated listener for the list).
  */
 export function sessionPanel(store, mode, { title, showCase = false }) {
-  const head = h("span.session-title");
-  const newBtn = h("button.btn.small", {
-    type: "button", text: "New session", title: "Start a new session: session stats and history begin again",
-    onclick: async () => {
-      const n = store.stats[mode].session.count;
-      if (n && !confirm(`Start a new ${title} session?\nThe ${n} solve(s) of this session stay in the all-time statistics.`)) return;
-      openId = null;
-      await store.newSession(mode);
-    },
-  });
+  const picker = sessionPicker(store, mode, { title, onChange: () => { openId = null; } });
   const stats = statsBlock({ compact: true });
   const list = h("ul.history.solves");
   const hint = h("div.hint", { text: "Click a solve: +2 / DNF / flag / delete" });
@@ -114,7 +151,7 @@ export function sessionPanel(store, mode, { title, showCase = false }) {
 
   function refresh() {
     const st = store.stats[mode];
-    head.textContent = `Session ${st.session_no}`;
+    picker.refresh();
     stats.update(st);
     const rows = store.recent[mode];
     const total = st.session.count;
@@ -136,8 +173,7 @@ export function sessionPanel(store, mode, { title, showCase = false }) {
   }
 
   const el = h("div.session-panel", null,
-    h("div.session-head", null, head, newBtn),
-    stats.el, hint, h("div.scroll", null, list));
+    picker.el, stats.el, hint, h("div.scroll", null, list));
   return { el, refresh };
 }
 

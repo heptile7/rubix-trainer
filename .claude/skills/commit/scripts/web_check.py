@@ -90,10 +90,19 @@ with sync_playwright() as p:
     page.click(".shown .history.solves li.actions button[data-act=delete]"); page.wait_for_timeout(250)
     check("delete a solve from the history", rows("full") == n1 - 1)
     all_n = page.evaluate("window.cubeApp.store.stats.full.all.count")
-    page.click(".shown .session-head button"); page.wait_for_timeout(250)
+    old_n = page.evaluate("window.cubeApp.store.stats.full.session_no")
+    answers.append("Web Check Cube")
+    page.click(".shown .session-picker button:has-text('New')"); page.wait_for_timeout(300)
     st = page.evaluate("window.cubeApp.store.stats.full")
-    check("new session", st["session"]["count"] == 0 and st["all"]["count"] == all_n
+    check("new named session", st["session"]["count"] == 0 and st["all"]["count"] == all_n
+          and st["session_name"] == "Web Check Cube"
           and page.locator(".shown .history.solves li[data-id]").count() == 0)
+    check("picker shows the new session",
+          "Web Check Cube" in page.locator(".shown .session-select option:checked").inner_text())
+    page.select_option(".shown .session-select", str(old_n)); page.wait_for_timeout(300)
+    st = page.evaluate("window.cubeApp.store.stats.full")
+    check("switch back to the earlier session", st["session_no"] == old_n
+          and page.locator(".shown .history.solves li[data-id]").count() == st["session"]["count"] > 0)
     page.screenshot(path=os.path.join(SHOTS, "web_full_session.png"))
     page.remove_listener("dialog", on_dialog)
 
@@ -109,6 +118,7 @@ with sync_playwright() as p:
     # --- OLL trainer
     page.goto(URL + "#oll"); page.wait_for_selector(".shown .case-scramble:not(:empty)")
     oll = ".shown"
+    SRC = "select[title='Where cases come from']"   # the From menu, not the session picker
     name = page.inner_text(f"{oll} .case-name")
     check("oll case shown", name.startswith("OLL"), name)
     check("oll picture", page.locator(f"{oll} .case-head svg rect").count() >= 9)
@@ -130,14 +140,14 @@ with sync_playwright() as p:
     page.screenshot(path=os.path.join(SHOTS, "web_oll.png"))
 
     # sources
-    opts = page.eval_on_selector_all(f"{oll} select option", "els => els.map(e => e.value)")
+    opts = page.eval_on_selector_all(f"{oll} {SRC} option", "els => els.map(e => e.value)")
     bad = []
     for v in opts:
-        page.select_option(f"{oll} select", v); page.wait_for_timeout(30)
+        page.select_option(f"{oll} {SRC}", v); page.wait_for_timeout(30)
         st = page.evaluate("(() => { const s = window.cubeApp.screens.oll.state; return [s.source, s.current && s.current.name]; })()")
         if st[0] != v: bad.append(v)
     check("oll every source selectable", not bad, f"{len(opts)} sources; bad={bad}")
-    page.select_option(f"{oll} select", "all")
+    page.select_option(f"{oll} {SRC}", "all")
 
     # picker click / double-click
     tile = page.locator(f"{oll} .tile[data-name='OLL 21']")
@@ -147,7 +157,7 @@ with sync_playwright() as p:
     check("picker click toggles", sel_after != sel_before)
     check("picker click -> source selected", page.evaluate("window.cubeApp.screens.oll.state.source") == "selected")
     tile.click(); page.wait_for_timeout(50)   # back
-    page.select_option(f"{oll} select", "all")
+    page.select_option(f"{oll} {SRC}", "all")
     tile.dblclick(); page.wait_for_timeout(150)
     st = page.evaluate("(() => { const s = window.cubeApp.screens.oll.state; return [s.source, s.pinned && s.pinned.name, s.current.name]; })()")
     check("picker dblclick pins", st[1] == "OLL 21" and st[2] == "OLL 21", str(st))
@@ -176,7 +186,7 @@ with sync_playwright() as p:
     with sqlite3.connect(tmp) as c:
         g = c.execute("SELECT COUNT(*) FROM custom_groups WHERE group_name='Smoke Dots'").fetchone()[0]
     check("group in DB", g == 8, str(g))
-    page.select_option(f"{oll} select", "custom:Smoke Dots"); page.wait_for_timeout(50)
+    page.select_option(f"{oll} {SRC}", "custom:Smoke Dots"); page.wait_for_timeout(50)
     cur = page.evaluate("window.cubeApp.screens.oll.state.current.group")
     check("custom source deals from group", cur == "Dot", cur)
     page.once("dialog", lambda d: d.accept())
