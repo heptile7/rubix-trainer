@@ -1,11 +1,11 @@
 ---
 name: commit
-description: Test and commit changes in the Cube Timer project with a proper commit message. Use when the user asks to commit, and on your own when a finished piece of work (a feature, fix or refactor the user asked for) is complete. Runs the checks that the changed files need, and commits only if they all pass. Never pushes, and never stages cube_times.db.
+description: Test and commit changes in the Cube Timer project with a proper commit message. Use when the user asks to commit, and on your own when a finished piece of work (a feature, fix or refactor the user asked for) is complete. Runs the checks that the changed files need, commits only if they all pass, then pushes the branch to origin. Never force-pushes, and never stages cube_times.db.
 ---
 
-# Commit after the right testing
+# Commit and push after the right testing
 
-The user has asked for finished work to be committed once it is tested. Follow this skill both when they say "commit" and when you finish a piece of work yourself.
+The user has asked for finished work to be committed once it is tested, and pushed to GitHub (`origin`, https://github.com/heptile7/rubix-trainer) once committed. Follow this skill both when they say "commit" and when you finish a piece of work yourself.
 
 ## When a commit is due
 
@@ -55,9 +55,15 @@ If one turn did several unrelated changes, make one commit per change: stage eac
 
    Check with `git status --short` that only the intended files are staged.
 
-7. **Commit** with a message in the format below, passed through a heredoc (`git commit -F - <<'EOF' ... EOF`). Don't amend, don't skip hooks, don't push.
+7. **Commit** with a message in the format below, passed through a heredoc (`git commit -F - <<'EOF' ... EOF`). Don't amend and don't skip hooks.
 
-8. **Report:** the short hash and subject, the checks that ran with their pass counts, and anything left out on purpose (for example "cube_times.db not staged").
+8. **Push** once every commit of the turn is made: `git push origin <current branch>` (`git push origin main` on main). Push only commits whose checks passed.
+   - Never force-push (`--force`, `--force-with-lease`), and never push other branches or tags.
+   - If the push is rejected because origin has commits you don't have, don't merge or rebase on your own. Leave the commit local and tell the user, with the git output.
+   - If it fails for any other reason (no network, authentication), the commit stays local. Report the error, and don't retry in a loop.
+   - Check with `git status -sb` that the branch is no longer ahead of `origin`.
+
+9. **Report:** the short hash and subject, the checks that ran with their pass counts, whether the push succeeded (`old..new  main -> main`), and anything left out on purpose (for example "cube_times.db not staged").
 
 ## Commit message format
 
