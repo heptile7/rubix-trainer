@@ -90,13 +90,23 @@ Two small differences in the web app:
 
 | Page | What it does |
 | --- | --- |
-| Full Solve | Shows a 20-move scramble and times the solve. Displays last, best, ao5 and ao12. |
-| OLL Practice | Deals a random case with a real scramble, its picture and (optionally) its algorithm, and times it. Draw from all cases, your selected set, your slowest cases, a learning status or one group; or pin a specific case. The right-hand column switches between a **case picker** (mini pictures to build your set) and your **history**. |
+| Full Solve | Shows a 20-move scramble and times the solve. Displays last, best, ao5 and ao12. The right-hand column shows the current **session**: its stats next to your all-time stats, and its solves. |
+| OLL Practice | Deals a random case with a real scramble, its picture and (optionally) its algorithm, and times it. Draw from all cases, your selected set, your slowest cases, a learning status or one group; or pin a specific case. The right-hand column switches between a **case picker** (mini pictures to build your set) and your **history** (the current session). |
 | PLL Practice | Same as OLL Practice, for the 21 PLL cases. |
 | Case Gallery | A large picture of every OLL and PLL case, grouped by shape, with its name, algorithm and learning status. Click cases to build a practice set. |
-| Statistics | Recent full solves with rolling averages, and count / best / average for every OLL and PLL case. |
+| Statistics | For Full Solve, OLL or PLL: session and all-time stats, and every solve with its ao5 / ao12, for this session or all time, optionally flagged solves only. Each row has +2 / DNF / flag / delete. Also count / best / average for every OLL and PLL case. |
 
 **Space** starts the timer, stops it, then moves on to the next scramble or case. Each time is saved when the timer stops; **Delete Last** removes the most recent one.
+
+### Sessions, penalties and flags
+
+Full Solve, OLL and PLL each have their own **session**. Every attempt goes into the current one. **New session** (at the top of the session column) starts the next session: its stats and history begin again, and the earlier solves stay in the **all-time** stats. The stats are: number of solves (and DNFs), best, worst, mean, the current ao5 / ao12 / ao50 / ao100, and the best ao5 and ao12.
+
+- **Under the timer**, *Last solve* has **OK / +2 / DNF / ⚑ Flag** for the attempt you just did.
+- **In the history**, click any solve to fix it: **+2** adds two seconds, **DNF** marks it as not finished, **OK** clears the penalty, **✕** deletes it (for a mis-start or any solve that shouldn't count). Click the same button again to undo a penalty.
+- **⚑ Flag** marks a solve for later, with an optional note such as *lucky PLL skip*. Flagged solves show ⚑ in the history; **Note…** changes the note, **Unflag** removes the flag and note. In Statistics, **Flagged only** lists them.
+
+A +2 counts as the time plus two seconds everywhere. A DNF is left out of best, worst and mean, and counts as the slowest time in an average: one DNF in an ao5 is dropped with the slowest time, two make the ao5 a DNF.
 
 ### Practising a set of cases
 
@@ -124,7 +134,7 @@ The picker column and the gallery grow with the window: maximise it for bigger p
 
 **Statuses:** mark each case *Unlearned*, *Learning* or *Finished*, either with the **This case** buttons on the practice page or by clicking the status under a card in the gallery (it cycles). Statuses are saved.
 
-The **History** tab lists the latest 40 attempts in that mode with their mean.
+The **History** tab shows the current session in that mode: its stats, **New session**, and its latest 100 attempts (see *Sessions, penalties and flags*).
 
 **Show algorithm** hides the algorithm so you have to recall it; the picture stays.
 
@@ -155,11 +165,13 @@ Pick a mode from the menu. Full Solve shows a scramble. OLL and PLL practice sho
 
 ## Data
 
-Times, your selected practice sets, case statuses and your own groups are stored in `cube_times.db`, created next to the scripts on first run. All three apps read and write the same file (see *Use one at a time* above). The terminal app records times only; it does not use the selected sets, statuses, groups or case scrambles. Delete it to start over; copy it to back up your history.
+Times (with their penalty, flag, note and session), your selected practice sets, case statuses and your own groups are stored in `cube_times.db`, created next to the scripts on first run. All three apps read and write the same file (see *Use one at a time* above). The terminal app records times only; it does not use the selected sets, statuses, groups, case scrambles or sessions, but its averages do apply +2 and DNF. Delete it to start over; copy it to back up your history.
+
+The first time a newer version opens an older `cube_times.db`, it adds the penalty / flag / note / session columns. Before doing so it saves a copy of the old file as `cube_times.before-sessions.db`; your existing times all go into session 1.
 
 The apps write a log to `cube_timer.log` (next to the scripts, rotated at 512 KB): startup time, each saved attempt, status and group changes, and any errors (for the web app, also errors in the browser page). Set the environment variable `CUBE_TIMER_DEBUG=1` before starting it to also log every selection change. The log is not committed to git.
 
-Averages (ao5, ao12, …) drop the best and worst time of the most recent *n* and average the rest.
+Averages (ao5, ao12, …) drop the best and worst 5% of the most recent *n* times (at least one each side: one for ao5 and ao12, three for ao50, five for ao100) and average the rest, as WCA and csTimer do.
 
 ## Files
 

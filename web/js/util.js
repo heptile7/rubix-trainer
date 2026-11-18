@@ -26,26 +26,43 @@ export function h(spec, attrs, ...children) {
 
 export const titleCase = (s) => s[0].toUpperCase() + s.slice(1);
 
-/** Seconds as M:SS.cc or SS.cc. */
+/** Seconds as M:SS.cc or SS.cc; "DNF" for a DNF (Infinity, or "DNF" from the server), "—" for none. */
 export function fmt(seconds) {
+  if (seconds == null) return "—";
+  if (seconds === Infinity || seconds === "DNF") return "DNF";
   if (seconds < 60) return seconds.toFixed(2);
   const m = Math.floor(seconds / 60);
   const s = seconds - m * 60;
   return `${m}:${s.toFixed(2).padStart(5, "0")}`;
 }
 
-/** Average of the latest n, trimming best and worst; null if too few. */
+/** A solve's time with its penalty applied: +2 adds two seconds, a DNF is Infinity (effective()). */
+export const eff = (solve) =>
+  solve.penalty === "dnf" ? Infinity : solve.seconds + (solve.penalty === "+2" ? 2 : 0);
+
+/** A solve as a history shows it: 12.34, 14.34+ or DNF (fmt_solve). */
+export const fmtSolve = (solve) =>
+  solve.penalty === "dnf" ? "DNF" : fmt(eff(solve)) + (solve.penalty === "+2" ? "+" : "");
+
+/**
+ * Average of the latest n (newest first), trimming the best and worst 5%,
+ * at least one each side (calc_ao). A DNF (Infinity) counts as the worst
+ * time, so two DNFs in an ao5 make it a DNF. null if there are too few.
+ */
 export function calcAo(times, n) {
   if (times.length < n) return null;
   const recent = times.slice(0, n).sort((a, b) => a - b);
   if (n <= 2) return recent.reduce((a, b) => a + b, 0) / n;
-  return recent.slice(1, -1).reduce((a, b) => a + b, 0) / (n - 2);
+  const trim = Math.max(1, Math.ceil(n * 0.05));
+  const kept = recent.slice(trim, -trim);
+  return kept.reduce((a, b) => a + b, 0) / kept.length;
 }
 
-/** "Last: … │ Best: … │ ao5: … │ ao12: …" for times newest first. */
+/** "Last: … │ Best: … │ ao5: … │ ao12: …" for times newest first (penalties applied). */
 export function resultBar(times) {
   if (!times || !times.length) return "";
-  const parts = [`Last: ${fmt(times[0])}`, `Best: ${fmt(Math.min(...times))}`];
+  const ok = times.filter((t) => t !== Infinity);
+  const parts = [`Last: ${fmt(times[0])}`, `Best: ${ok.length ? fmt(Math.min(...ok)) : "DNF"}`];
   const a5 = calcAo(times, 5), a12 = calcAo(times, 12);
   if (a5) parts.push(`ao5: ${fmt(a5)}`);
   if (a12) parts.push(`ao12: ${fmt(a12)}`);

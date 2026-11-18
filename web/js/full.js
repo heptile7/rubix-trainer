@@ -1,9 +1,11 @@
-// Full Solve: WCA-style scramble, timer, result bar (FullSolveScreen).
+// Full Solve: WCA-style scramble, timer, result bar (FullSolveScreen), and on
+// the right the current session: its stats and history (solves.js).
 // Scrambles are made in the browser, so New Scramble / Next never wait on the server.
 
 import { api } from "./api.js";
 import { Timer } from "./timer.js";
-import { h, fmt, generateScramble, resultBar } from "./util.js";
+import { h, fmt, eff, generateScramble, resultBar } from "./util.js";
+import { sessionPanel, lastSolveBar } from "./solves.js";
 
 const READY = "Press SPACE or Start to begin";
 
@@ -13,9 +15,15 @@ export function fullScreen(store) {
   const statusLine = h("div.status-line", { text: READY });
   const startBtn = h("button.btn.big.primary", { type: "button", text: "Start  [space]" });
   const result = h("div.result-bar");
+  const session = sessionPanel(store, "full", { title: "Full Solve" });
+  const last = lastSolveBar(store, "full");
   let scramble = "";
 
-  const refreshResult = () => { result.textContent = resultBar(store.recent.full.map((r) => r[1])); };
+  function refreshTimes() {
+    result.textContent = resultBar(store.recent.full.map(eff));
+    session.refresh();
+    last.refresh();
+  }
 
   function newScramble() {
     timer.reset();
@@ -28,44 +36,45 @@ export function fullScreen(store) {
     onNext: newScramble,
     onStop(seconds) {
       // show it at once; the server's answer replaces the local guess
-      store.recent.full.unshift([null, seconds, ""]);
-      refreshResult();
+      store.recent.full.unshift({ id: null, case: null, seconds, penalty: null, flagged: false, note: null, ts: "" });
+      refreshTimes();
       statusLine.textContent = `Saved  ${fmt(seconds)}  —  press SPACE for next scramble`;
-      api.addTime({ mode: "full", seconds, scramble }).then((r) => {
-        store.applyTimes("full", null, r);
-        refreshResult();
-      });
+      api.addTime({ mode: "full", seconds, scramble }).then((r) => store.applyTimes("full", null, r));
     },
   });
   startBtn.onclick = () => timer.toggle();
+  store.onTimes((m) => m === "full" && refreshTimes());
+
+  const main = h("div.timer-main", null,
+    h("h1", { text: "Full Solve", style: "margin:6px 0 4px" }),
+    scrambleBox,
+    timerLabel,
+    statusLine,
+    h("div.row", null,
+      startBtn,
+      h("button.btn.big", { type: "button", text: "New Scramble", onclick: newScramble }),
+      h("button.btn.big.danger", {
+        type: "button", text: "Delete Last",
+        onclick: async () => {
+          const r = await api.deleteLast("full");
+          if (r && r.deleted) {
+            store.applyTimes("full", null, r);
+            statusLine.textContent = "Last time deleted.";
+          }
+        },
+      })),
+    last.el,
+    result);
 
   const el = h("section.screen", null,
-    h("div.timer-main", null,
-      h("h1", { text: "Full Solve", style: "margin:6px 0 4px" }),
-      scrambleBox,
-      timerLabel,
-      statusLine,
-      h("div.row", null,
-        startBtn,
-        h("button.btn.big", { type: "button", text: "New Scramble", onclick: newScramble }),
-        h("button.btn.big.danger", {
-          type: "button", text: "Delete Last",
-          onclick: async () => {
-            const r = await api.deleteLast("full");
-            if (r && r.deleted) {
-              store.applyTimes("full", null, r);
-              statusLine.textContent = "Last time deleted.";
-              refreshResult();
-            }
-          },
-        })),
-      result));
+    h("div.trainer", null, main, h("div.side", null, session.el)));
 
   newScramble();
-  refreshResult();
+  refreshTimes();
   return {
     el,
     timer,
+    onShow: refreshTimes,
     onHide: () => timer.reset(),
   };
 }

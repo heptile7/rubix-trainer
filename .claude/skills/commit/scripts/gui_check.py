@@ -100,6 +100,33 @@ check("gallery open pins", app.screen("pll")._pinned is case, app._active_screen
 app.show_screen("stats"); pump(30)
 check("stats after records", app.screen("stats").winfo_ismapped())
 
+# --- sessions: penalty / flag / delete / new session (dialogs replaced) ---
+full = app.screen("full"); app.show_screen("full"); pump()
+for _ in range(2):
+    full.timer_toggle(); pump(3); time.sleep(0.12); full.timer_toggle(); pump(3); full.timer_toggle(); pump(3)
+newest = db.solves("full", "session", limit=1)[0][0]
+full.last_bar.buttons["dnf"].invoke(); pump()
+check("last solve DNF", db.solve(newest)[4] == "dnf")
+full.last_bar.buttons["+2"].invoke(); pump()
+check("last solve +2", db.solve(newest)[4] == "+2")
+panel = full.session
+second = panel._rows[1][0]
+panel.select(second); pump()
+panel.actions.ask_note = lambda prompt: "gui check"
+panel.buttons.buttons["flag"].invoke(); pump()
+check("flag with note", db.solve(second)[5:7] == (1, "gui check"))
+panel.actions.confirm = lambda msg: True
+panel.buttons.buttons["delete"].invoke(); pump()
+check("delete selected solve", db.solve(second) is None)
+all_n = db.stats("full")["count"]
+panel.confirm = lambda msg: True
+panel.new_session(); pump()
+check("new session", db.stats("full", "session")["count"] == 0 and db.stats("full")["count"] == all_n
+      and not panel._rows)
+st = app.screen("stats"); app.show_screen("stats"); pump()
+st._set(scope="all"); pump()
+check("stats all-time rows", len(st._rows) >= 1)
+
 # resize: layouts reflow without error
 app.root.geometry("1600x1000"); app.show_screen("cases"); pump(40)
 app.root.geometry("1000x660"); app.show_screen("oll"); pump(40)

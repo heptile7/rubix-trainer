@@ -16,8 +16,14 @@ export class Store {
     this.custom = {};       // mode -> Map group name -> Set of names
     this.active = {};       // mode -> custom group being edited, or null
     this.caseTimes = {};    // mode -> {name: latest 12 times, newest first}
-    this.recent = boot.recent;  // mode -> [[case, seconds, ts]], newest first
+    // mode -> the current session's attempts, newest first:
+    //   {id, case, seconds, penalty: null | "+2" | "dnf", flagged, note, ts}
+    // (id is null for an attempt shown before the server has saved it)
+    this.recent = boot.recent;
+    // mode -> {session_no, session: stats, all: stats} (solve_stats; "DNF" for a DNF)
+    this.stats = boot.stats;
     this._listeners = [];
+    this._timeListeners = [];
     for (const mode of ["oll", "pll"]) {
       this.cases[mode] = boot.cases[mode];
       this.byName[mode] = Object.fromEntries(boot.cases[mode].map((c) => [c.name, c]));
@@ -183,14 +189,41 @@ export class Store {
   }
 
   // --- times ----------------------------------------------------------
-  /** Apply what the server returned after an attempt was added or deleted. */
+  /** fn(mode) runs whenever a mode's attempts or stats change. */
+  onTimes(fn) { this._timeListeners.push(fn); }
+
+  /**
+   * Apply what the server returned after an attempt was added, changed or
+   * deleted (times_after_change), then tell the time listeners.
+   */
   applyTimes(mode, caseName, result) {
     if (!result) return;
     this.recent[mode] = result.recent;
-    if (caseName && result.case_times) {
-      if (mode === "full") return;
+    if (result.stats) this.stats[mode] = result.stats;
+    caseName = caseName || result.case;
+    if (mode !== "full" && caseName && result.case_times) {
       if (result.case_times.length) this.caseTimes[mode][caseName] = result.case_times;
       else delete this.caseTimes[mode][caseName];
     }
+    for (const fn of this._timeListeners) fn(mode);
+  }
+
+  /** Penalty null (none), "+2" or "dnf" for a saved attempt. */
+  async setPenalty(mode, id, penalty) {
+    this.applyTimes(mode, null, await api.setPenalty(id, penalty));
+  }
+
+  /** Flag an attempt with an optional note, or unflag it. */
+  async setFlag(mode, id, flagged, note = null) {
+    this.applyTimes(mode, null, await api.setFlag(id, flagged, note));
+  }
+
+  async deleteSolve(mode, id) {
+    this.applyTimes(mode, null, await api.deleteSolve(id));
+  }
+
+  /** Start a new session in this mode: its history and session stats begin again. */
+  async newSession(mode) {
+    this.applyTimes(mode, null, await api.newSession(mode));
   }
 }

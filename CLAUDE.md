@@ -30,7 +30,7 @@ A failed check or stale docs returns `{"decision": "block"}`, so the turn contin
 
 ## Layout
 
-- `cube_timer.py` — the data layer and the CLI in one file: `OLL_CASES`, `PLL_CASES`, `generate_scramble`, `invert_alg`, `case_scramble`, `setup_scramble`, `fmt`, `calc_ao`, `Database`, then the `rich`-based terminal modes.
+- `cube_timer.py` — the data layer and the CLI in one file: `OLL_CASES`, `PLL_CASES`, `generate_scramble`, `invert_alg`, `case_scramble`, `setup_scramble`, `DNF`, `effective`, `fmt`, `fmt_solve`, `calc_ao`, `best_ao`, `solve_stats`, `Database`, then the `rich`-based terminal modes.
 - `make_scrambles.py` — standalone pure-Python Kociemba two-phase solver (cubie model, move/pruning tables cached as a pickle in the system temp folder) that writes `case_scrambles.json`. Not imported by the app.
 - `case_scrambles.json` — `{"scrambles": {case name: [scramble, ...]}}`, generated; safe to regenerate.
 - `cube_timer_gui.py` — customtkinter app. Imports the data layer from `cube_timer.py`. `CubeTimerApp` owns a sidebar and one frame per screen, shown and hidden with `grid()` / `grid_remove()`.
@@ -40,6 +40,8 @@ A failed check or stale docs returns `{"decision": "block"}`, so the turn contin
 - `cube_times.db` — the user's recorded times. **User data: never delete, reset or overwrite it.** Tests that record times should use a temporary database path.
 
 ## Things to know before editing
+
+**Sessions, penalties and flags.** Each `times` row also has `penalty` (NULL, `'+2'` or `'dnf'`), `flagged` (0/1), `note` and `session`. Each mode has its own current session in table `sessions` (`Database.current_session` / `new_session`); `add` stamps it and returns the new id. `Database._add_solve_columns` adds the columns to an older file with `ALTER TABLE`, after copying it once to `cube_times.before-sessions.db` (git-ignored). Keep `seconds` raw and apply the penalty when reading: `effective(seconds, penalty)` gives the time with +2 added, or `DNF` (`math.inf`) for a DNF. `calc_ao` trims 5% each side (at least one), so a DNF is the worst time and two in an ao5 make it `inf`; `fmt(inf)` is `"DNF"` and `fmt(None)` is `"—"`. `get`, `recent`, `recent_means` and `case_summary` apply penalties (the last two leave DNFs out). `solves(mode, scope)` returns raw tuples `(id, case_name, seconds, penalty, flagged, note, ts, session)`, newest first; `solve_table` adds the rolling ao5 / ao12 for the Statistics table, and `stats(mode, scope)` is `solve_stats` over a scope (`"session"` or `"all"`). Change solves only with `set_penalty`, `set_flag` (unflagging drops the note) and `delete_solve`.
 
 **Case names are database keys.** Times are stored with `case_name` set to the case's `name` (e.g. `"OLL 21"`, `"T Perm"`). Renaming a case orphans its history.
 
@@ -52,6 +54,8 @@ A failed check or stale docs returns `{"decision": "block"}`, so the turn contin
 **PLL arrows ignore a final turn of the top layer.** Several listed algorithms finish one U turn from solved, so `_arrows` tries all four alignments and keeps the simplest (fewest pieces moved, then shortest cycles, then fewest corners).
 
 **Timer screens share a base class.** `FullSolveScreen` and `CaseTrainerScreen` extend `TimerScreenBase`, which runs the idle → running → stopped state machine and builds the case panel (`_build_case_panel`). Subclasses supply `timer_label`, `start_btn`, `_next()` and `_save_result()`. One `CaseTrainerScreen` class serves both OLL and PLL practice, parametrised by mode.
+
+**Session widgets (GUI).** `SessionPanel` (Full Solve's right-hand column and the trainers' History tab) shows "Session N" with New session, a `StatsBlock` (plain tk labels) and the session's history. A click selects a solve for its `SolveButtons`; with nothing selected they act on the newest solve. Both timer screens also have a `last_bar` (`SolveButtons`) under the timer. Every change goes through `SolveActions.run(solve, action)`, which takes a `Database.solves()` tuple. Its `ask_note` and `confirm`, and `SessionPanel.confirm`, can be replaced in tests. `StatsScreen`'s Solves tab (mode / scope / flagged-only) uses the same pieces; its table cells are plain tk labels, and selecting a row only recolours that row's labels.
 
 **Screens are built lazily.** `CubeTimerApp.screen(name)` builds a screen on first use from `_factories`; only Full Solve exists at startup (about 0.6 s, against 5 s when everything was built up front). Use `app.screen(name)`, not `app._screens[name]`, for a screen that may not exist yet. Store listeners skip hidden screens (`winfo_ismapped()`), which repaint in `on_show`.
 
@@ -95,7 +99,7 @@ The GUI can be driven without user input: build `CubeTimerApp()`, call `app.show
 - **Threads.** Every endpoint is `async def`, so all run on the event-loop thread. The `Database` is opened in the lifespan handler on that same thread, because sqlite connections can't cross threads. Don't add sync (`def`) endpoints that touch `db`.
 - **Bootstrap.** `GET /` inlines the bootstrap JSON into `index.html` at `<!--BOOT-->`. That JSON holds the cases with pictures (`diagram_json`) and weights, the selection, statuses and groups, recent attempts, and the last 12 times per case, so the first paint needs no extra request.
 - **Pictures.** Case pictures are computed once in `create_app` (about 0.4 s).
-- **Endpoints:** `/api/deal/{mode}/{case}` (setup scramble and its picture), `/api/times`, `/api/times/last/{mode}`, `/api/times/{mode}`, `/api/summary/{mode}`, `/api/selected/{mode}`, `/api/status/{mode}`, `/api/groups/{mode}/{name}`, `/api/state`, `/api/log`. The docs are at `/api/docs`.
+- **Endpoints:** `/api/deal/{mode}/{case}` (setup scramble and its picture), `/api/times`, `/api/times/last/{mode}`, `/api/times/{mode}`, `/api/solves/{mode}` (Statistics rows), `/api/solves/{id}/penalty`, `/api/solves/{id}/flag`, `DELETE /api/solves/{id}`, `/api/session/{mode}` (new session), `/api/stats/{mode}`, `/api/summary/{mode}`, `/api/selected/{mode}`, `/api/status/{mode}`, `/api/groups/{mode}/{name}`, `/api/state`, `/api/log`. The docs are at `/api/docs`.
 - **Static files** are served with ETags and `no-cache`, so edits show up on reload.
 - **Dependency check.** `check_dependencies()` runs at import, before fastapi is imported. It exits with a message naming any missing or too-old package (`MIN_VERSIONS`). Keep `MIN_VERSIONS` in step with `requirements.txt`. The user has an old virtualenv with fastapi 0.70 and pydantic 1.8; pydantic 1.8 crashes on import under Python 3.11.
 
@@ -105,6 +109,7 @@ The GUI can be driven without user input: build `CubeTimerApp()`, call `app.show
 - `util.js` ports `fmt`, `calc_ao` and `generate_scramble`. Full Solve scrambles are made in the browser.
 - `timer.js` is the idle → running → stopped machine.
 - Screens: `full.js`, `trainer.js` (OLL and PLL), `gallery.js`, `stats.js`. Shared widgets (`selectionTools`, `myGroups`, `groupHeader`, `casePicker`) are in `widgets.js`.
+- `solves.js` holds the session widgets: `statsBlock`, `sessionPanel` (used by Full Solve and the trainers' History tab), `lastSolveBar` and `solveAction` (+2 / DNF / OK / flag / note / delete, with `prompt` / `confirm`). `store.recent[mode]` holds the current session's solves as objects `{id, case, seconds, penalty, flagged, note, ts}` (`id` is null until the server has saved it), and `store.stats[mode]` is `{session_no, session, all}`. Every change to times goes through `store.applyTimes`, which calls the `store.onTimes(fn)` listeners. JSON has no infinity, so the server sends DNF times and averages as the string `"DNF"` (`jsonable`); `fmt` accepts it. `util.js` has `eff` and `fmtSolve` (ports of `effective` and `fmt_solve`).
 
 **Rules for speed:**
 - Build DOM once; on store changes only flip classes and text. Use one delegated listener per list, not one per tile.

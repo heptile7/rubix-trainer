@@ -248,6 +248,45 @@ table.stats td.has { color: var(--stopped); }
 table.stats td.alg { font-family: var(--mono); max-width: 330px; overflow: hidden;
                      text-overflow: ellipsis; white-space: nowrap; }
 .summary { color: #999; font-size: 12px; margin: 10px 4px; }
+table.stats td.dnf { color: #ff6b6b; }
+table.stats td.plus2 { color: var(--learning); }
+table.stats td.note { color: var(--stopped); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+table.stats td.ts { color: var(--muted); font-size: 12px; }
+table.stats td.acts { white-space: nowrap; padding-right: 4px; }
+table.stats td.acts .btn { height: 22px; padding: 0 6px; margin-left: 2px; font-size: 11px; }
+.stats-filters { justify-content: flex-start; margin: 10px 0 2px; gap: 12px; }
+.stats-screen .stat-block { margin: 2px 0 4px; }
+
+/* ---- sessions and solves (solves.js) ----------------------------------- */
+.btn.small.on { background: var(--accent); }
+.session-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.session-panel .stat-block { align-self: flex-start; }
+.session-head { display: flex; align-items: center; justify-content: space-between; margin: 0 6px 4px; }
+.session-title { font-weight: 700; font-size: 14px; }
+table.stat-block { border-collapse: collapse; font-size: 12px; margin: 0 6px 4px; }
+table.stat-block th, table.stat-block td { padding: 1px 18px 1px 0; text-align: left; white-space: nowrap; }
+table.stat-block thead th { color: #b3b3b3; border-bottom: 1px solid #444; padding-bottom: 3px; }
+table.stat-block tbody th { color: var(--muted); font-weight: 400; }
+table.stat-block td.num { font-family: var(--mono); }
+.history.solves li { display: grid; grid-template-columns: 34px minmax(0, 1fr) 16px auto; gap: 4px;
+                     align-items: center; padding: 2px 4px; border-radius: 4px; cursor: pointer; }
+.history.solves li:hover { background: #363636; }
+.history.solves li.open { background: var(--current); }
+.history.solves li .n { color: var(--dim); font-size: 11px; }
+.history.solves li .case { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history.solves li .flag { color: var(--stopped); text-align: center; }
+.history.solves li .time { font-family: var(--mono); text-align: right; min-width: 52px; }
+.history.solves li .time.dnf { color: #ff6b6b; }
+.history.solves li .time.plus2 { color: var(--learning); }
+.history.solves li.actions { display: flex; flex-wrap: wrap; gap: 3px; justify-content: flex-start; background: var(--current);
+                             cursor: default; margin-bottom: 3px; }
+.history.solves li.actions .btn { height: 22px; padding: 0 7px; font-size: 11px; }
+.history.solves li.note { display: block; background: var(--current); color: var(--stopped);
+                          font-size: 11px; cursor: default; white-space: normal; }
+.history.solves li.empty { display: block; color: var(--muted); cursor: default; }
+.history.solves li.empty:hover { background: none; }
+.last-solve { display: flex; align-items: center; gap: 4px; min-height: 26px; flex-wrap: wrap; justify-content: center; }
+.last-solve .label { color: var(--muted); font-size: 12px; margin-right: 4px; }
 
 /* ---- toast ------------------------------------------------------------ */
 #toast {

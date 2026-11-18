@@ -19,11 +19,14 @@ from tkinter import messagebox
 import customtkinter as ctk
 
 from cube_timer import (
+    DNF,
     OLL_CASES,
     PLL_CASES,
     Database,
     calc_ao,
+    effective,
     fmt,
+    fmt_solve,
     generate_scramble,
     setup_logging,
     setup_scramble,
@@ -42,6 +45,11 @@ C_STOPPED = "#ffcc00"
 C_PANEL   = "#2b2b2b"        # panel / card background (case diagrams sit on it)
 C_CURRENT = "#454545"        # picker tile of the case being practised
 SIDE_WIDTH = 262             # practice pages' right-hand column (picker / history)
+
+C_DNF     = "#ff6b6b"        # a DNF in histories and tables
+C_PLUS2   = "#ff9f1c"        # a +2
+C_TEXT    = "#DCE4EE"        # ctk's label text colour, for plain tk labels
+HISTORY   = 100              # attempts of the current session listed in a history
 
 STATUSES = ["unlearned", "learning", "finished"]
 STATUS_COLOR = {"unlearned": "gray50", "learning": "#ff9f1c", "finished": "#3fa7ff"}
@@ -174,6 +182,289 @@ class TimerScreenBase(ctk.CTkFrame):
 
 
 # ---------------------------------------------------------------------------
+# Sessions and single solves (shared by Full Solve, the trainers and Statistics)
+# ---------------------------------------------------------------------------
+def result_bar_text(times):
+    """"Last │ Best │ ao5 │ ao12" for times newest first, penalties applied."""
+    if not times:
+        return ""
+    ok = [t for t in times if t != DNF]
+    parts = [f"Last: {fmt(times[0])}", f"Best: {fmt(min(ok)) if ok else 'DNF'}"]
+    a5  = calc_ao(times, 5)
+    a12 = calc_ao(times, 12)
+    if a5:  parts.append(f"ao5: {fmt(a5)}")
+    if a12: parts.append(f"ao12: {fmt(a12)}")
+    return "   │   ".join(parts)
+
+
+def solve_color(penalty):
+    return C_DNF if penalty == "dnf" else C_PLUS2 if penalty == "+2" else None
+
+
+class SolveActions:
+    """
+    +2 / DNF / OK, flag (with a note), note and delete for one solve, given as a
+    Database.solves() tuple. on_change() runs after anything was changed.
+    ask_note(prompt) (None = cancelled) and confirm(message) can be replaced in tests.
+    """
+
+    def __init__(self, db, on_change):
+        self.db        = db
+        self.on_change = on_change
+        self.ask_note  = lambda prompt: ctk.CTkInputDialog(title="Flag solve", text=prompt).get_input()
+        self.confirm   = lambda msg: messagebox.askyesno("Delete solve", msg)
+
+    def run(self, solve, action):
+        if solve is None:
+            return False
+        sid, case, seconds, penalty, flagged, note = solve[:6]
+        if action == "ok":
+            self.db.set_penalty(sid, None)
+        elif action in ("+2", "dnf"):
+            self.db.set_penalty(sid, None if penalty == action else action)
+        elif action == "flag":
+            if flagged:
+                self.db.set_flag(sid, False)
+            else:
+                text = self.ask_note("Flag this solve. Note (optional):")
+                if text is None:
+                    return False
+                self.db.set_flag(sid, True, text)
+        elif action == "note":
+            now = f"\n(now: {note})" if note else ""
+            text = self.ask_note(f"Note for this solve:{now}")
+            if text is None:
+                return False
+            self.db.set_flag(sid, True, text)
+        elif action == "delete":
+            what = fmt_solve(seconds, penalty) + (f" ({case})" if case else "")
+            if not self.confirm(f"Delete the solve {what}?\nIt is removed from every statistic."):
+                return False
+            self.db.delete_solve(sid)
+        else:
+            raise ValueError(action)
+        self.on_change()
+        return True
+
+
+class SolveButtons(ctk.CTkFrame):
+    """A label and OK / +2 / DNF / Flag / Note / Delete buttons for one solve."""
+
+    ACTIONS = [("ok", "OK", 40), ("+2", "+2", 40), ("dnf", "DNF", 46),
+               ("flag", "⚑ Flag", 70), ("note", "Note…", 56), ("delete", "✕", 30)]
+
+    def __init__(self, parent, on_action, actions=None):
+        super().__init__(parent, fg_color="transparent")
+        keep = actions or [a for a, _, _ in self.ACTIONS]
+        self.label = ctk.CTkLabel(self, text="", height=26, font=ctk.CTkFont(size=12),
+                                  text_color="gray60")
+        self.label.grid(row=0, column=0, padx=(0, 6))
+        self.buttons = {}
+        for col, (act, text, width) in enumerate(
+                [a for a in self.ACTIONS if a[0] in keep], start=1):
+            btn = ctk.CTkButton(self, text=text, width=width, height=26,
+                                font=ctk.CTkFont(size=12), fg_color="gray30",
+                                hover_color="#6B0000" if act == "delete" else "gray40",
+                                command=lambda a=act: on_action(a))
+            btn.grid(row=0, column=col, padx=2)
+            self.buttons[act] = btn
+        self._shown = None
+
+    def show(self, solve, label=""):
+        """Highlight the solve's penalty and flag; disable everything for no solve."""
+        state = (label, None if solve is None else (solve[3], bool(solve[4])))
+        if state == self._shown:
+            return
+        self._shown = state
+        self.label.configure(text=label)
+        penalty, flagged = state[1] if solve is not None else (None, False)
+        on = {"ok": solve is not None and penalty is None, "+2": penalty == "+2",
+              "dnf": penalty == "dnf", "flag": flagged}
+        for act, btn in self.buttons.items():
+            btn.configure(state="disabled" if solve is None or (act == "note" and not flagged)
+                          else "normal",
+                          fg_color="#1f6aa5" if on.get(act) else "gray30")
+        if "flag" in self.buttons:
+            self.buttons["flag"].configure(text="⚑ Unflag" if flagged else "⚑ Flag")
+
+
+STAT_ROWS = [("count", "Solves"), ("best", "Best"), ("worst", "Worst"), ("mean", "Mean"),
+             ("ao5", "ao5"), ("ao12", "ao12"), ("ao50", "ao50"), ("ao100", "ao100"),
+             ("best_ao5", "Best ao5"), ("best_ao12", "Best ao12")]
+
+
+def stat_text(stats, key):
+    if key == "count":
+        return f"{stats['count']}  ({stats['dnf']} DNF)" if stats["dnf"] else str(stats["count"])
+    return fmt(stats[key])
+
+
+class StatsBlock(tk.Frame):
+    """Session vs all-time summary as a small table of plain tk labels."""
+
+    def __init__(self, parent, bg, compact=False):
+        super().__init__(parent, bg=bg)
+        family = ctk.ThemeManager.theme["CTkFont"]["family"]
+        size   = -_px(parent, 12)
+        self.rows = [r for r in STAT_ROWS if not compact or r[0] not in ("worst", "ao50")]
+        head = dict(bg=bg, fg="#b3b3b3", font=(family, size, "bold"), anchor="w")
+        self.session_head = tk.Label(self, text="Session", **head)
+        self.session_head.grid(row=0, column=1, sticky="w", padx=(0, _px(parent, 18)))
+        tk.Label(self, text="All time", **head).grid(row=0, column=2, sticky="w")
+        self.cells = []
+        for i, (_, label) in enumerate(self.rows, start=1):
+            tk.Label(self, text=label, bg=bg, fg="gray55", font=(family, size), anchor="w").grid(
+                row=i, column=0, sticky="w", padx=(0, _px(parent, 18)))
+            pair = [tk.Label(self, text="", bg=bg, fg=C_TEXT, font=("Consolas", size), anchor="w")
+                    for _ in range(2)]
+            pair[0].grid(row=i, column=1, sticky="w")
+            pair[1].grid(row=i, column=2, sticky="w")
+            self.cells.append(pair)
+
+    def update_stats(self, session_no, session, all_time):
+        self.session_head.configure(text=f"Session {session_no}")
+        for (key, _), (a, b) in zip(self.rows, self.cells):
+            a.configure(text=stat_text(session, key))
+            b.configure(text=stat_text(all_time, key))
+
+
+class SessionPanel(ctk.CTkFrame):
+    """
+    The current session of one mode: "Session N" with New session, the session
+    and all-time stats, and the session's history. Clicking a solve selects it
+    for the buttons at the bottom (the newest solve when none is selected).
+    on_change() runs after the session or any solve changed.
+    """
+
+    def __init__(self, parent, db, mode, title, show_case=False, on_change=None):
+        super().__init__(parent, fg_color="transparent")
+        self.db        = db
+        self.mode      = mode
+        self.title     = title
+        self.show_case = show_case
+        self.on_change = on_change
+        self.actions   = SolveActions(db, self._changed)
+        self.confirm   = lambda msg: messagebox.askyesno("New session", msg)
+        self._selected = None            # solve id picked in the history
+        self._rows     = []              # the session's solves, newest first
+        self._labels   = {}              # solve id -> its row's labels
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(3, weight=1)
+
+        head = ctk.CTkFrame(self, fg_color="transparent")
+        head.grid(row=0, column=0, padx=8, pady=(4, 2), sticky="ew")
+        head.grid_columnconfigure(0, weight=1)
+        self.title_label = ctk.CTkLabel(head, text="", font=ctk.CTkFont(size=14, weight="bold"))
+        self.title_label.grid(row=0, column=0, sticky="w")
+        ctk.CTkButton(head, text="New session", width=96, height=26, font=ctk.CTkFont(size=12),
+                      fg_color="gray30", hover_color="gray40",
+                      command=self.new_session).grid(row=0, column=1)
+
+        self.stats = StatsBlock(self, bg=C_PANEL, compact=True)
+        self.stats.grid(row=1, column=0, padx=10, pady=(0, 4), sticky="w")
+
+        ctk.CTkLabel(self, text="Click a solve, then +2 / DNF / flag / delete", height=16,
+                     font=ctk.CTkFont(size=11), text_color="gray55").grid(row=2, column=0)
+
+        self.list = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.list.grid(row=3, column=0, padx=2, pady=(0, 4), sticky="nsew")
+        self.list.grid_columnconfigure(1, weight=1)
+
+        self.buttons = SolveButtons(self, self._on_action,
+                                    actions=["ok", "+2", "dnf", "flag", "note", "delete"])
+        self.buttons.label.grid_remove()
+        self.buttons.grid(row=4, column=0, pady=(0, 2))
+        self.selected_label = ctk.CTkLabel(self, text="", height=16, font=ctk.CTkFont(size=11),
+                                           text_color="gray55")
+        self.selected_label.grid(row=5, column=0, pady=(0, 6))
+
+    # ------------------------------------------------------------------
+    def refresh(self):
+        db, mode = self.db, self.mode
+        self._rows = db.solves(mode, "session", limit=HISTORY)
+        self.title_label.configure(text=f"Session {db.current_session(mode)}")
+        self.stats.update_stats(db.current_session(mode), db.stats(mode, "session"),
+                                db.stats(mode))
+        if self._selected not in {r[0] for r in self._rows}:
+            self._selected = None
+
+        for w in self.list.winfo_children():
+            w.destroy()
+        self._labels = {}
+        bg     = self.list._parent_canvas.cget("bg")
+        family = ctk.ThemeManager.theme["CTkFont"]["family"]
+        size   = -_px(self, 12)
+        if not self._rows:
+            tk.Label(self.list, text="No solves in this session yet.", bg=bg, fg="gray55",
+                     font=(family, size)).grid(row=0, column=0, columnspan=4, pady=8)
+        count = db.stats(mode, "session")["count"]
+        for i, row in enumerate(self._rows):
+            sid, case, seconds, penalty, flagged, note, ts = row[:7]
+            cells = [
+                (str(count - i), "gray45", (family, size - 1), "w"),
+                (case if self.show_case else ts[5:16], C_TEXT if self.show_case else "gray55",
+                 (family, size), "w"),
+                ("⚑" if flagged else "", C_STOPPED, (family, size), "center"),
+                (fmt_solve(seconds, penalty), solve_color(penalty) or (C_STOPPED if i == 0 else C_TEXT),
+                 ("Consolas", size), "e"),
+            ]
+            labels = []
+            for col, (text, fg, font, anchor) in enumerate(cells):
+                lbl = tk.Label(self.list, text=text, bg=bg, fg=fg, font=font, anchor=anchor)
+                lbl.grid(row=i, column=col, sticky="ew", padx=(_px(self, 4), 0), ipady=1)
+                lbl.bind("<Button-1>", lambda e, s=sid: self.select(s))
+                labels.append(lbl)
+            self._labels[sid] = labels
+        self._paint_selection()
+
+    def select(self, solve_id):
+        """Pick a solve for the buttons; picking it again goes back to the newest."""
+        self._selected = None if self._selected == solve_id else solve_id
+        self._paint_selection()
+
+    def selected_solve(self):
+        rows = {r[0]: r for r in self._rows}
+        if self._selected in rows:
+            return rows[self._selected]
+        return self._rows[0] if self._rows else None
+
+    def _paint_selection(self):
+        bg = self.list._parent_canvas.cget("bg")
+        for sid, labels in self._labels.items():
+            for lbl in labels:
+                lbl.configure(bg=C_CURRENT if sid == self._selected else bg)
+        solve = self.selected_solve()
+        self.buttons.show(solve)
+        if solve is None:
+            self.selected_label.configure(text="")
+        else:
+            which = "Selected" if self._selected else "Newest"
+            what = fmt_solve(solve[2], solve[3]) + (f"  {solve[1]}" if solve[1] else "")
+            note = f"  •  ⚑ {solve[5]}" if solve[5] else ""
+            self.selected_label.configure(text=f"{which}: {what}{note}")
+
+    def _on_action(self, action):
+        self.actions.run(self.selected_solve(), action)
+
+    def new_session(self):
+        n = self.db.stats(self.mode, "session")["count"]
+        if n and not self.confirm(
+                f"Start a new {self.title} session?\n"
+                f"The {n} solve(s) of this session stay in the all-time statistics."):
+            return False
+        self.db.new_session(self.mode)
+        self._selected = None
+        self._changed()
+        return True
+
+    def _changed(self):
+        self.refresh()
+        if self.on_change:
+            self.on_change()
+
+
+# ---------------------------------------------------------------------------
 # Full Solve Screen
 # ---------------------------------------------------------------------------
 class FullSolveScreen(TimerScreenBase):
@@ -183,9 +474,11 @@ class FullSolveScreen(TimerScreenBase):
         self._scramble = ""
         self._build_ui()
         self._new_scramble()
+        self.session.refresh()
+        self._refresh_times()
 
     def _build_ui(self):
-        self.grid_columnconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=3)
         self.grid_rowconfigure(2, weight=1)
 
         ctk.CTkLabel(self, text="Full Solve", font=ctk.CTkFont(size=20, weight="bold")).grid(
@@ -193,13 +486,13 @@ class FullSolveScreen(TimerScreenBase):
 
         # Scramble panel
         scramble_frame = ctk.CTkFrame(self, corner_radius=8)
-        scramble_frame.grid(row=1, column=0, padx=40, pady=6, sticky="ew")
+        scramble_frame.grid(row=1, column=0, padx=30, pady=6, sticky="ew")
         scramble_frame.grid_columnconfigure(0, weight=1)
 
         self.scramble_label = ctk.CTkLabel(
             scramble_frame, text="",
             font=ctk.CTkFont(family="Consolas", size=15),
-            wraplength=620, justify="center",
+            wraplength=560, justify="center",
         )
         self.scramble_label.grid(row=0, column=0, padx=16, pady=14)
 
@@ -241,11 +534,31 @@ class FullSolveScreen(TimerScreenBase):
             command=self._delete_last,
         ).grid(row=0, column=2, padx=8)
 
+        # Penalty / flag for the newest solve
+        self.last_bar = SolveButtons(self, self._last_action, actions=["ok", "+2", "dnf", "flag"])
+        self.last_bar.grid(row=5, column=0, pady=(2, 2))
+
         # Result bar
         self.result_label = ctk.CTkLabel(
             self, text="", font=ctk.CTkFont(size=13), text_color="gray65",
         )
-        self.result_label.grid(row=5, column=0, pady=(4, 24))
+        self.result_label.grid(row=6, column=0, pady=(4, 24))
+
+        # Right-hand column: the current session
+        self.grid_columnconfigure(1, weight=2, minsize=SIDE_WIDTH)
+        side = ctk.CTkFrame(self, fg_color=C_PANEL, corner_radius=8, width=SIDE_WIDTH)
+        side.grid(row=0, column=1, rowspan=7, padx=(0, 16), pady=16, sticky="nsew")
+        side.grid_propagate(False)
+        side.grid_columnconfigure(0, weight=1)
+        side.grid_rowconfigure(0, weight=1)
+        self.session = SessionPanel(side, self.db, "full", "Full Solve",
+                                    on_change=self._refresh_times)
+        self.session.grid(row=0, column=0, padx=4, pady=8, sticky="nsew")
+
+    def on_show(self):
+        """Solves may have been changed on the Statistics screen."""
+        self.session.refresh()
+        self._refresh_times()
 
     # ------------------------------------------------------------------
     def _new_scramble(self):
@@ -262,25 +575,28 @@ class FullSolveScreen(TimerScreenBase):
         self.db.add("full", elapsed, scramble=self._scramble)
         log.info("full solve: %s", fmt(elapsed))
         self.status_label.configure(text=f"Saved  {fmt(elapsed)}  —  press SPACE for next scramble")
-        self._refresh_result_bar()
+        self.session.refresh()
+        self._refresh_times()
 
-    def _refresh_result_bar(self):
-        rows = self.db.get("full", limit=12)
-        if not rows:
-            return
-        times = [r[0] for r in rows]
-        parts = [f"Last: {fmt(times[0])}",
-                 f"Best: {fmt(min(times))}"]
-        a5  = calc_ao(times, 5)
-        a12 = calc_ao(times, 12)
-        if a5:  parts.append(f"ao5: {fmt(a5)}")
-        if a12: parts.append(f"ao12: {fmt(a12)}")
-        self.result_label.configure(text="   │   ".join(parts))
+    def _newest(self):
+        rows = self.db.solves("full", "session", limit=1)
+        return rows[0] if rows else None
+
+    def _refresh_times(self):
+        """Result bar (this session's latest 12) and the newest solve's buttons."""
+        rows = self.db.solves("full", "session", limit=12)
+        self.result_label.configure(text=result_bar_text([effective(r[2], r[3]) for r in rows]))
+        newest = rows[0] if rows else None
+        self.last_bar.show(newest, f"Last solve {fmt_solve(newest[2], newest[3])}:" if newest else "")
+
+    def _last_action(self, action):
+        self.session.actions.run(self._newest(), action)
 
     def _delete_last(self):
         if self.db.delete_last("full"):
             self.status_label.configure(text="Last time deleted.")
-            self._refresh_result_bar()
+            self.session.refresh()
+            self._refresh_times()
 
 
 # ---------------------------------------------------------------------------
@@ -872,10 +1188,13 @@ class CaseTrainerScreen(TimerScreenBase):
             command=self._delete_last,
         ).grid(row=0, column=2, padx=8)
 
+        self.last_bar = SolveButtons(self, self._last_action, actions=["ok", "+2", "dnf", "flag"])
+        self.last_bar.grid(row=7, column=0, pady=(2, 2))
+
         self.result_label = ctk.CTkLabel(
             self, text="", font=ctk.CTkFont(size=13), text_color="gray65",
         )
-        self.result_label.grid(row=7, column=0, pady=(4, 16))
+        self.result_label.grid(row=8, column=0, pady=(4, 16))
 
         self._build_side()
 
@@ -885,7 +1204,7 @@ class CaseTrainerScreen(TimerScreenBase):
         self.grid_columnconfigure(0, weight=3)
         self.grid_columnconfigure(1, weight=2, minsize=SIDE_WIDTH)
         side = ctk.CTkFrame(self, fg_color=C_PANEL, corner_radius=8, width=SIDE_WIDTH)
-        side.grid(row=0, column=1, rowspan=8, padx=(0, 16), pady=(16, 16), sticky="nsew")
+        side.grid(row=0, column=1, rowspan=9, padx=(0, 16), pady=(16, 16), sticky="nsew")
         side.grid_propagate(False)
         side.grid_columnconfigure(0, weight=1)
         side.grid_rowconfigure(1, weight=1)
@@ -930,14 +1249,10 @@ class CaseTrainerScreen(TimerScreenBase):
         self.history_tab = ctk.CTkFrame(side, fg_color="transparent")
         self.history_tab.grid(row=1, column=0, sticky="nsew")
         self.history_tab.grid_columnconfigure(0, weight=1)
-        self.history_tab.grid_rowconfigure(1, weight=1)
-        self.history_summary = ctk.CTkLabel(
-            self.history_tab, text="", height=18, font=ctk.CTkFont(size=11),
-            text_color="gray55")
-        self.history_summary.grid(row=0, column=0, pady=(0, 4))
-        self.history_frame = ctk.CTkScrollableFrame(self.history_tab, fg_color="transparent")
-        self.history_frame.grid(row=1, column=0, padx=2, pady=(0, 8), sticky="nsew")
-        self.history_frame.grid_columnconfigure(0, weight=1)
+        self.history_tab.grid_rowconfigure(0, weight=1)
+        self.session = SessionPanel(self.history_tab, self.db, self.mode, self.title,
+                                    show_case=True, on_change=self._on_times_changed)
+        self.session.grid(row=0, column=0, sticky="nsew")
 
         self.side_tabs.set("Cases")
         self._show_side("Cases")
@@ -1128,47 +1443,34 @@ class CaseTrainerScreen(TimerScreenBase):
                     case_name=self._current_case["name"], scramble=self._scramble)
         log.info("%s attempt: %s %s", self.mode, self._current_case["name"], fmt(elapsed))
         self.status_label.configure(text=f"Saved  {fmt(elapsed)}  —  press SPACE for next case")
-        self._refresh_result_bar()
         self._refresh_history()
 
     def _refresh_result_bar(self):
+        """This case's latest 12 times, and the newest solve's penalty / flag buttons."""
+        rows = self.db.solves(self.mode, "session", limit=1)
+        newest = rows[0] if rows else None
+        self.last_bar.show(newest, f"Last solve {fmt_solve(newest[2], newest[3])}:" if newest else "")
         if not self._current_case:
             return
-        rows = self.db.get(self.mode, case_name=self._current_case["name"], limit=12)
-        if not rows:
-            self.result_label.configure(text="No times for this case yet.")
-            return
-        times = [r[0] for r in rows]
-        parts = [f"Last: {fmt(times[0])}", f"Best: {fmt(min(times))}"]
-        a5  = calc_ao(times, 5)
-        a12 = calc_ao(times, 12)
-        if a5:  parts.append(f"ao5: {fmt(a5)}")
-        if a12: parts.append(f"ao12: {fmt(a12)}")
-        self.result_label.configure(text="   │   ".join(parts))
+        times = [t for t, _ in self.db.get(self.mode, case_name=self._current_case["name"], limit=12)]
+        self.result_label.configure(text=result_bar_text(times) or "No times for this case yet.")
 
     def _refresh_history(self):
-        for w in self.history_frame.winfo_children():
-            w.destroy()
-        rows = self.db.recent(self.mode, limit=40)
-        if not rows:
-            self.history_summary.configure(text="No times yet")
-            return
-        times = [r[1] for r in rows]
-        self.history_summary.configure(
-            text=f"last {len(times)}   mean {fmt(sum(times) / len(times))}")
-        for i, (name, seconds, _ts) in enumerate(rows):
-            ctk.CTkLabel(self.history_frame, text=name or "?", anchor="w", height=22,
-                         font=ctk.CTkFont(size=12)).grid(row=i, column=0, sticky="w", padx=(4, 0))
-            ctk.CTkLabel(self.history_frame, text=fmt(seconds), anchor="e", height=22,
-                         font=ctk.CTkFont(family="Consolas", size=12),
-                         text_color=C_STOPPED if i == 0 else None).grid(
-                row=i, column=1, sticky="e", padx=(6, 4))
+        self.session.refresh()
+        self._refresh_result_bar()
+
+    def _on_times_changed(self):
+        """A solve's penalty / flag changed, one was deleted, or a new session began."""
+        self._refresh_result_bar()
+
+    def _last_action(self, action):
+        rows = self.db.solves(self.mode, "session", limit=1)
+        self.session.actions.run(rows[0] if rows else None, action)
 
     def _delete_last(self):
         """Removes the newest attempt in this mode (the top row of the history)."""
         if self.db.delete_last(self.mode):
             self.status_label.configure(text="Last time deleted.")
-            self._refresh_result_bar()
             self._refresh_history()
 
 
@@ -1359,12 +1661,28 @@ class CasesScreen(ctk.CTkFrame):
 # Statistics Screen
 # ---------------------------------------------------------------------------
 class StatsScreen(ctk.CTkFrame):
+    """
+    Solves tab: for Full Solve, OLL or PLL, the session and all-time stats and
+    every solve (this session or all time, optionally flagged only) with its
+    ao5 / ao12; click a row, then +2 / DNF / flag / note / delete.
+    OLL / PLL Progress tabs: per-case count, best and average.
+    """
+
+    LIMIT = 200                       # rows listed at most (the stats cover every solve)
+    MODES = {"Full Solve": "full", "OLL": "oll", "PLL": "pll"}
+    SCOPES = {"This session": "session", "All time": "all"}
 
     def __init__(self, parent, root, db):
         super().__init__(parent, fg_color="transparent")
         self.root = root
         self.db   = db
-        self._scroll = {}
+        self._scroll   = {}
+        self._mode     = "full"
+        self._scope    = "session"
+        self._rows     = []           # dicts from Database.solve_table, newest first
+        self._selected = None         # solve id picked in the table
+        self._row_labels = {}         # solve id -> its row's labels
+        self.actions   = SolveActions(db, self._after_action)
         self._build_ui()
 
     def _build_ui(self):
@@ -1388,19 +1706,63 @@ class StatsScreen(ctk.CTkFrame):
         self.tabs = ctk.CTkTabview(self)
         self.tabs.grid(row=1, column=0, padx=16, pady=(0, 16), sticky="nsew")
 
-        for tab_name in ("Full Solve", "OLL Progress", "PLL Progress"):
+        for tab_name in ("Solves", "OLL Progress", "PLL Progress"):
             self.tabs.add(tab_name)
             tab = self.tabs.tab(tab_name)
             tab.grid_columnconfigure(0, weight=1)
-            tab.grid_rowconfigure(0, weight=1)
+            row = 0
+            if tab_name == "Solves":
+                self._build_solves_controls(tab)
+                row = 4
+            tab.grid_rowconfigure(row, weight=1)
             sf = ctk.CTkScrollableFrame(tab)
-            sf.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+            sf.grid(row=row, column=0, sticky="nsew", padx=4, pady=4)
             self._scroll[tab_name] = sf
 
+    def _build_solves_controls(self, tab):
+        bar = ctk.CTkFrame(tab, fg_color="transparent")
+        bar.grid(row=0, column=0, padx=4, pady=(2, 4), sticky="w")
+        self.mode_seg = ctk.CTkSegmentedButton(bar, values=list(self.MODES),
+                                               command=lambda v: self._set(mode=self.MODES[v]))
+        self.mode_seg.set("Full Solve")
+        self.mode_seg.grid(row=0, column=0, padx=(0, 16))
+        self.scope_seg = ctk.CTkSegmentedButton(bar, values=list(self.SCOPES),
+                                                command=lambda v: self._set(scope=self.SCOPES[v]))
+        self.scope_seg.set("This session")
+        self.scope_seg.grid(row=0, column=1, padx=(0, 16))
+        self.flagged_only = ctk.CTkCheckBox(bar, text="Flagged only", width=110,
+                                            command=lambda: self._set())
+        self.flagged_only.grid(row=0, column=2)
+
+        self.stats_block = StatsBlock(tab, bg=tab.cget("fg_color")[1]
+                                      if isinstance(tab.cget("fg_color"), (list, tuple))
+                                      else tab.cget("fg_color"))
+        self.stats_block.grid(row=1, column=0, padx=8, pady=(2, 4), sticky="w")
+
+        self.buttons = SolveButtons(tab, lambda a: self.actions.run(self._selected_tuple(), a))
+        self.buttons.grid(row=2, column=0, padx=4, pady=(2, 0), sticky="w")
+        self.table_note = ctk.CTkLabel(tab, text="", height=16, font=ctk.CTkFont(size=11),
+                                       text_color="gray55")
+        self.table_note.grid(row=3, column=0, padx=8, sticky="w")
+
+    def _set(self, mode=None, scope=None):
+        if mode:
+            self._mode = mode
+        if scope:
+            self._scope = scope
+        self._selected = None
+        self._build_solves()
+
     def refresh(self):
-        self._build_session_table(self._scroll["Full Solve"],    "full")
+        self._build_solves()
         self._build_case_table(self._scroll["OLL Progress"], "oll", OLL_CASES)
         self._build_case_table(self._scroll["PLL Progress"], "pll", PLL_CASES)
+
+    def _after_action(self):
+        self._build_solves()
+        if self._mode != "full":
+            name = f"{self._mode.upper()} Progress"
+            self._build_case_table(self._scroll[name], self._mode, CASES[self._mode])
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -1410,64 +1772,99 @@ class StatsScreen(ctk.CTkFrame):
 
     # Table cells are plain tk labels: hundreds of CTkLabels took over a second
     # to create. They copy the scroll frame's background and ctk's font.
-    def _cell(self, parent, text, row, col, width, color=None, bold=False):
+    def _cell(self, parent, text, row, col, width, color=None, bold=False, mono=False):
         if not hasattr(self, "_cell_style"):
             family = ctk.ThemeManager.theme["CTkFont"]["family"]
             self._cell_style = {
                 "bg": parent._parent_canvas.cget("bg"),
                 "font": (family, -_px(self, 13)),
                 "bold": (family, -_px(self, 13), "bold"),
+                "mono": ("Consolas", -_px(self, 13)),
             }
         st = self._cell_style
-        tk.Label(parent, text=text, anchor="w", bd=0, bg=st["bg"],
-                 fg=color or "#DCE4EE", font=st["bold"] if bold else st["font"]).grid(
-            row=row, column=col, padx=_px(self, 3), pady=_px(self, 3) if bold else _px(self, 2),
-            sticky="w")
+        lbl = tk.Label(parent, text=text, anchor="w", bd=0, bg=st["bg"], fg=color or C_TEXT,
+                       font=st["bold"] if bold else st["mono"] if mono else st["font"])
+        lbl.grid(row=row, column=col, padx=_px(self, 3), pady=_px(self, 3) if bold else _px(self, 2),
+                 sticky="we")
         parent.grid_columnconfigure(col, minsize=_px(self, width))
+        return lbl
 
     def _header_cell(self, parent, text, col, width):
         self._cell(parent, text, 0, col, width, bold=True)
 
-    def _data_cell(self, parent, text, row, col, width, color=None):
-        self._cell(parent, text, row, col, width, color=color)
+    def _data_cell(self, parent, text, row, col, width, color=None, mono=False):
+        return self._cell(parent, text, row, col, width, color=color, mono=mono)
 
     # ------------------------------------------------------------------
-    def _build_session_table(self, parent, mode):
-        self._clear(parent)
-        rows = self.db.get(mode, limit=50)
+    def _build_solves(self):
+        db, mode, scope = self.db, self._mode, self._scope
+        self.stats_block.update_stats(db.current_session(mode), db.stats(mode, "session"),
+                                      db.stats(mode))
+        flagged = bool(self.flagged_only.get())
+        self._rows, total = db.solve_table(mode, scope, flagged_only=flagged, limit=self.LIMIT)
+        where = f"session {db.current_session(mode)}" if scope == "session" else "all"
+        shown = f"Latest {self.LIMIT} shown; " if len(self._rows) >= self.LIMIT else ""
+        self.table_note.configure(text=f"{shown}{total} solve(s) in {where}.  "
+                                       "Click a row to pick it for the buttons above.")
 
-        if not rows:
-            ctk.CTkLabel(parent, text="No times recorded yet.",
+        parent = self._scroll["Solves"]
+        self._clear(parent)
+        self._row_labels = {}
+        if not self._rows:
+            ctk.CTkLabel(parent, text="No solves here yet.",
                          text_color="gray55").grid(row=0, column=0, padx=20, pady=24)
+            self._paint_selection()
             return
 
-        headers = ["#",   "Time", "ao5",  "ao12", "Timestamp"]
-        widths  = [44,    82,     82,     82,     170]
+        case_col = mode != "full"
+        headers = ["#", "Case", "Time", "ao5", "ao12", "Flag / note", "Date"]
+        widths  = [44,  90,     82,     70,    70,     220,           150]
+        if not case_col:
+            del headers[1], widths[1]
         for col, (h, w) in enumerate(zip(headers, widths)):
             self._header_cell(parent, h, col, w)
 
-        all_t = [r[0] for r in rows]
-        best  = min(all_t)
-        for i, (t, ts) in enumerate(rows):
-            a5  = calc_ao(all_t[i:], 5)
-            a12 = calc_ao(all_t[i:], 12)
-            vals   = [str(len(rows) - i), fmt(t),
-                      fmt(a5) if a5 else "—", fmt(a12) if a12 else "—", ts]
-            colors = [None, C_RUNNING if t == best else None, None, None, None]
-            for col, (v, w, c) in enumerate(zip(vals, widths, colors)):
-                self._data_cell(parent, v, i + 1, col, w, c)
+        best = db.stats(mode, scope)["best"]
+        for i, r in enumerate(self._rows, start=1):
+            time_color = solve_color(r["penalty"]) or (C_RUNNING if r["time"] == best else None)
+            vals = [(str(r["n"]), None, False)]
+            if case_col:
+                vals.append((r["case"] or "?", None, False))
+            note = f"⚑ {r['note'] or ''}" if r["flagged"] else ""
+            if len(note) > 34:
+                note = note[:33] + "…"
+            vals += [(fmt_solve(r["seconds"], r["penalty"]), time_color, True),
+                     (fmt(r["ao5"]), None, True), (fmt(r["ao12"]), None, True),
+                     (note, C_STOPPED, False), (r["ts"], "gray60", False)]
+            labels = []
+            for col, ((text, color, mono), w) in enumerate(zip(vals, widths)):
+                lbl = self._data_cell(parent, text, i, col, w, color, mono)
+                lbl.bind("<Button-1>", lambda e, sid=r["id"]: self.select(sid))
+                labels.append(lbl)
+            self._row_labels[r["id"]] = labels
+        self._paint_selection()
 
-        # Summary
-        mean = sum(all_t) / len(all_t)
-        a5   = calc_ao(all_t, 5)
-        a12  = calc_ao(all_t, 12)
-        summary = (f"Count: {len(all_t)}   Best: {fmt(best)}   Mean: {fmt(mean)}"
-                   + (f"   ao5: {fmt(a5)}"  if a5  else "")
-                   + (f"   ao12: {fmt(a12)}" if a12 else ""))
-        ctk.CTkLabel(parent, text=summary, text_color="gray60",
-                     font=ctk.CTkFont(size=12)).grid(
-            row=len(rows) + 1, column=0, columnspan=5,
-            padx=4, pady=(10, 4), sticky="w")
+    def select(self, solve_id):
+        self._selected = None if self._selected == solve_id else solve_id
+        self._paint_selection()
+
+    def _selected_tuple(self):
+        """The picked row as a Database.solves() tuple (what SolveActions takes)."""
+        for r in self._rows:
+            if r["id"] == self._selected:
+                return (r["id"], r["case"], r["seconds"], r["penalty"], r["flagged"],
+                        r["note"], r["ts"], r["session"])
+        return None
+
+    def _paint_selection(self):
+        bg = self._scroll["Solves"]._parent_canvas.cget("bg")
+        for sid, labels in self._row_labels.items():
+            for lbl in labels:
+                lbl.configure(bg=C_CURRENT if sid == self._selected else bg)
+        solve = self._selected_tuple()
+        label = (f"#{next(r['n'] for r in self._rows if r['id'] == self._selected)}  "
+                 f"{fmt_solve(solve[2], solve[3])}:" if solve else "Pick a solve:")
+        self.buttons.show(solve, label)
 
     def _build_case_table(self, parent, mode, cases):
         self._clear(parent)
@@ -1478,6 +1875,7 @@ class StatsScreen(ctk.CTkFrame):
         for col, (h, w) in enumerate(zip(headers, widths)):
             self._header_cell(parent, h, col, w)
 
+        # best and average leave out DNFs (None when a case has only DNFs)
         for row_i, case in enumerate(cases, start=1):
             row  = summary.get(case["name"])
             n    = str(row[1]) if row else "—"
@@ -1487,7 +1885,7 @@ class StatsScreen(ctk.CTkFrame):
             alg  = case["alg"] if len(case["alg"]) <= 44 else case["alg"][:43] + "…"
             vals   = [case["name"], case["group"], alg, n, best, avg]
             colors = [None, None, None, None,
-                      C_STOPPED if row else None, None]
+                      C_STOPPED if row and row[2] is not None else None, None]
             for col, (v, w, c) in enumerate(zip(vals, widths, colors)):
                 self._data_cell(parent, v, row_i, col, w, c)
 

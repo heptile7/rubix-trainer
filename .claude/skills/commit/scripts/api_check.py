@@ -67,9 +67,35 @@ with TestClient(app) as c:
 
     # times round trip
     r = c.post("/api/times", json={"mode": "oll", "case": "OLL 21", "seconds": 3.21, "scramble": "R U"}).json()
-    check("add time", r["recent"][0][:2] == ["OLL 21", 3.21] and r["case_times"][0] == 3.21)
+    top = r["recent"][0]
+    check("add time", (top["case"], top["seconds"], top["id"]) == ("OLL 21", 3.21, r["id"])
+          and r["case_times"][0] == 3.21 and r["stats"]["session"]["count"] >= 1)
+    oll_id = r["id"]
     r = c.post("/api/times", json={"mode": "full", "seconds": 15.5, "scramble": "R"}).json()
-    check("add full", r["recent"][0][1] == 15.5)
+    check("add full", r["recent"][0]["seconds"] == 15.5)
+
+    # penalties, flags, single deletes and sessions
+    r = c.put(f"/api/solves/{oll_id}/penalty", json={"penalty": "+2"}).json()
+    check("+2 penalty", r["recent"][0]["penalty"] == "+2" and r["case_times"][0] == 5.21)
+    r = c.put(f"/api/solves/{oll_id}/penalty", json={"penalty": "dnf"}).json()
+    check("DNF left out of case times", r["stats"]["session"]["dnf"] >= 1
+          and 3.21 not in r["case_times"] and 5.21 not in r["case_times"])
+    check("bad penalty 400", c.put(f"/api/solves/{oll_id}/penalty", json={"penalty": "x"}).status_code == 400)
+    r = c.put(f"/api/solves/{oll_id}/flag", json={"flagged": True, "note": " lucky "}).json()
+    check("flag with note", r["recent"][0]["flagged"] and r["recent"][0]["note"] == "lucky")
+    t = c.get("/api/solves/oll?scope=all&flagged=true").json()
+    check("flagged-only list", [x["id"] for x in t["rows"]] == [oll_id] and t["rows"][0]["time"] == "DNF")
+    for s in (10, 11, 12, 13):
+        c.post("/api/times", json={"mode": "full", "seconds": s})
+    st = c.get("/api/stats/full").json()
+    check("session ao5", st["session"]["ao5"] is not None, st["session"]["ao5"])
+    all_before = st["all"]["count"]
+    r = c.post("/api/session/full").json()
+    check("new session", r["stats"]["session"]["count"] == 0 and r["recent"] == []
+          and r["stats"]["all"]["count"] == all_before and r["stats"]["session_no"] == st["session_no"] + 1)
+    r = c.delete(f"/api/solves/{oll_id}").json()
+    check("delete any solve", r["case"] == "OLL 21" and c.delete(f"/api/solves/{oll_id}").status_code == 404)
+    r = c.post("/api/times", json={"mode": "oll", "case": "OLL 21", "seconds": 3.21}).json()
     check("bad time 400", c.post("/api/times", json={"mode": "oll", "case": "OLL 21", "seconds": -1}).status_code == 400)
     check("bad case 400", c.post("/api/times", json={"mode": "oll", "case": "X", "seconds": 1}).status_code == 400)
     r = c.delete("/api/times/last/oll").json()

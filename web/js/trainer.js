@@ -10,6 +10,7 @@ import { diagramSvg } from "./diagram.js";
 import { Timer } from "./timer.js";
 import { h, fmt, STATUSES, SLOWEST_COUNT, titleCase, groupOrder, pick, pickWeighted, resultBar, toast } from "./util.js";
 import { selectionTools, casePicker } from "./widgets.js";
+import { sessionPanel, lastSolveBar } from "./solves.js";
 
 const PICK_HINT = "Click: select  •  double-click: pin";
 const READY = "Scramble from solved (yellow top, green front), then press SPACE";
@@ -58,6 +59,7 @@ export function trainerScreen(store, mode, title) {
   const statusLine = h("div.status-line");
   const startBtn = h("button.btn.big.primary", { type: "button", text: "Start  [space]" });
   const result = h("div.result-bar");
+  const last = lastSolveBar(store, mode);
 
   const main = h("div.timer-main", null,
     h("h1", { text: title, style: "margin:0 0 2px" }),
@@ -75,6 +77,7 @@ export function trainerScreen(store, mode, title) {
       startBtn,
       h("button.btn.big", { type: "button", text: "Next Case", onclick: () => pickNextCase() }),
       h("button.btn.big.danger", { type: "button", text: "Delete Last", onclick: deleteLast })),
+    last.el,
     result);
 
   // ---- side column: Cases | History ---------------------------------------
@@ -96,9 +99,8 @@ export function trainerScreen(store, mode, title) {
   const casesTab = h("div.side-body", null,
     selectionTools(store, mode, { compact: true, onEdit: onSetEdited }),
     hoverLabel, pinBar, picker.el);
-  const historySummary = h("div.hint");
-  const historyList = h("ul.history");
-  const historyTab = h("div.side-body", { hidden: true }, historySummary, h("div.scroll", null, historyList));
+  const session = sessionPanel(store, mode, { title, showCase: true });
+  const historyTab = h("div.side-body", { hidden: true }, session.el);
   const sideTabs = segmented(["Cases", "History"], (v) => {
     casesTab.hidden = v !== "Cases";
     historyTab.hidden = v === "Cases";
@@ -272,17 +274,11 @@ export function trainerScreen(store, mode, title) {
     result.textContent = times && times.length ? resultBar(times) : "No times for this case yet.";
   }
 
+  /** The session panel, the last-solve bar and the result bar. */
   function refreshHistory() {
-    const rows = store.recent[mode];
-    if (!rows.length) {
-      historySummary.textContent = "No times yet";
-      historyList.replaceChildren();
-      return;
-    }
-    const mean = rows.reduce((a, r) => a + r[1], 0) / rows.length;
-    historySummary.textContent = `last ${rows.length}   mean ${fmt(mean)}`;
-    historyList.replaceChildren(...rows.map((r) =>
-      h("li", null, h("span", { text: r[0] || "?" }), h("span", { text: fmt(r[1]) }))));
+    session.refresh();
+    last.refresh();
+    refreshResult();
   }
 
   const timer = new Timer(timerLabel, startBtn, {
@@ -294,19 +290,14 @@ export function trainerScreen(store, mode, title) {
       const times = store.caseTimes[mode][name] || (store.caseTimes[mode][name] = []);
       times.unshift(seconds);
       times.length = Math.min(times.length, 12);
-      store.recent[mode].unshift([name, seconds, ""]);
-      store.recent[mode].length = Math.min(store.recent[mode].length, 40);
-      refreshResult();
+      store.recent[mode].unshift({ id: null, case: name, seconds, penalty: null, flagged: false, note: null, ts: "" });
       refreshHistory();
       statusLine.textContent = `Saved  ${fmt(seconds)}  —  press SPACE for next case`;
-      api.addTime({ mode, case: name, seconds, scramble }).then((r) => {
-        store.applyTimes(mode, name, r);
-        refreshResult();
-        refreshHistory();
-      });
+      api.addTime({ mode, case: name, seconds, scramble }).then((r) => store.applyTimes(mode, name, r));
     },
   });
   startBtn.onclick = () => timer.toggle();
+  store.onTimes((m) => m === mode && refreshHistory());
 
   /** Removes the newest attempt in this mode (the top row of the history). */
   async function deleteLast() {
@@ -314,8 +305,6 @@ export function trainerScreen(store, mode, title) {
     if (r && r.deleted) {
       store.applyTimes(mode, r.case, r);
       statusLine.textContent = "Last time deleted.";
-      refreshResult();
-      refreshHistory();
     }
   }
 

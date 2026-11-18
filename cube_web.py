@@ -61,7 +61,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from cube_diagram import case_diagram, case_weight, scramble_state, state_diagram
-from cube_timer import OLL_CASES, PLL_CASES, Database, setup_logging, setup_scramble
+from cube_timer import (DNF, OLL_CASES, PENALTIES, PLL_CASES, Database, effective,
+                        setup_logging, setup_scramble)
 
 log = logging.getLogger("cube_timer.web")
 
@@ -71,7 +72,7 @@ DB_PATH  = ROOT / "cube_times.db"
 CASES    = {"oll": OLL_CASES, "pll": PLL_CASES}
 MODES    = ("full", "oll", "pll")
 STATUSES = ("unlearned", "learning", "finished")
-RECENT   = 40       # attempts shown in a trainer's History tab
+HISTORY  = 100      # attempts of the current session sent for a screen's history
 CASE_N   = 12       # times kept per case (result bar: last, best, ao5, ao12)
 
 
@@ -120,9 +121,34 @@ class StatusChange(BaseModel):
     status: str
 
 
+class PenaltyChange(BaseModel):
+    penalty: str | None = None      # None, "+2" or "dnf"
+
+
+class FlagChange(BaseModel):
+    flagged: bool
+    note: str | None = None
+
+
 class ClientLog(BaseModel):
     level: str = "error"
     message: str
+
+
+def jsonable(value):
+    """JSON has no infinity: a DNF time or average is sent as the string "DNF"."""
+    if isinstance(value, dict):
+        return {k: jsonable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [jsonable(v) for v in value]
+    return "DNF" if value == DNF else value
+
+
+def solve_json(row):
+    """A Database.solves() tuple as the object the page uses."""
+    sid, case, seconds, penalty, flagged, note, ts, _session = row
+    return {"id": sid, "case": case, "seconds": seconds, "penalty": penalty,
+            "flagged": bool(flagged), "note": note, "ts": ts}
 
 
 # ---------------------------------------------------------------------------
@@ -165,18 +191,26 @@ def create_app(db_path=DB_PATH):
     def case_times(mode):
         """{case name: its latest CASE_N times, newest first}, in one query."""
         out = {}
-        for name, seconds in db.conn.execute(
-                "SELECT case_name,seconds FROM times WHERE mode=? AND case_name IS NOT NULL "
+        for name, seconds, penalty in db.conn.execute(
+                "SELECT case_name,seconds,penalty FROM times WHERE mode=? AND case_name IS NOT NULL "
                 "ORDER BY rowid DESC", (mode,)):
             times = out.setdefault(name, [])
-            if len(times) < CASE_N:
-                times.append(seconds)
+            if len(times) < CASE_N and penalty != "dnf":
+                times.append(effective(seconds, penalty))
         return out
 
+    def one_case_times(mode, case):
+        rows = db.solves(mode, case_name=case, limit=CASE_N * 3)
+        return [effective(r[2], r[3]) for r in rows if r[3] != "dnf"][:CASE_N]
+
     def recent(mode):
-        if mode == "full":
-            return [[None, s, ts] for s, ts in db.get("full", limit=CASE_N)]
-        return [list(r) for r in db.recent(mode, limit=RECENT)]
+        """The current session's latest attempts, newest first."""
+        return [solve_json(r) for r in db.solves(mode, "session", limit=HISTORY)]
+
+    def stats(mode):
+        return {"session_no": db.current_session(mode),
+                "session":    jsonable(db.stats(mode, "session")),
+                "all":        jsonable(db.stats(mode))}
 
     def user_state():
         return {m: {"selected": sorted(db.get_selected(m)),
@@ -189,15 +223,22 @@ def create_app(db_path=DB_PATH):
             "cases":      cases,
             "state":      user_state(),
             "recent":     {m: recent(m) for m in MODES},
+            "stats":      {m: stats(m) for m in MODES},
             "case_times": {m: case_times(m) for m in CASES},
         }
 
     def times_after_change(mode, case):
-        """What a screen needs to repaint after an attempt is added or removed."""
-        out = {"recent": recent(mode)}
+        """What a screen needs to repaint after an attempt is added, changed or removed."""
+        out = {"mode": mode, "case": case, "recent": recent(mode), "stats": stats(mode)}
         if case:
-            out["case_times"] = [s for s, _ in db.get(mode, case, CASE_N)]
+            out["case_times"] = one_case_times(mode, case)
         return out
+
+    def find_solve(solve_id):
+        row = db.solve(solve_id)
+        if not row:
+            raise HTTPException(404, f"no solve {solve_id}")
+        return row[0], row[2]       # mode, case name
 
     # --- page -----------------------------------------------------------
     # index.html carries the bootstrap data inline, so the first paint needs no
@@ -240,10 +281,10 @@ def create_app(db_path=DB_PATH):
             check_names(a.mode, [a.case])
         if not 0 < a.seconds < 24 * 3600:
             raise HTTPException(400, "time out of range")
-        db.add(a.mode, a.seconds, case_name=a.case if a.mode != "full" else None,
-               scramble=a.scramble)
+        case = a.case if a.mode != "full" else None
+        sid = db.add(a.mode, a.seconds, case_name=case, scramble=a.scramble)
         log.info("%s attempt: %s %.2f", a.mode, a.case or "-", a.seconds)
-        return times_after_change(a.mode, a.case)
+        return {"id": sid, **times_after_change(a.mode, case)}
 
     @app.delete("/api/times/last/{mode}")
     async def delete_last(mode: str):
@@ -253,12 +294,57 @@ def create_app(db_path=DB_PATH):
                               "ORDER BY rowid DESC LIMIT 1", (mode,)).fetchone()
         if not row or not db.delete_last(mode):
             return {"deleted": False, **times_after_change(mode, None)}
-        return {"deleted": True, "case": row[0], **times_after_change(mode, row[0])}
+        return {"deleted": True, **times_after_change(mode, row[0])}
 
     @app.get("/api/times/{mode}")
     async def get_times(mode: str, limit: int = 50):
+        """Latest [time, timestamp] pairs, penalties applied."""
         check_mode(mode)
-        return [[s, ts] for s, ts in db.get(mode, limit=max(1, min(limit, 1000)))]
+        return jsonable([[s, ts] for s, ts in db.get(mode, limit=max(1, min(limit, 1000)))])
+
+    # --- single solves and sessions ----------------------------------------
+    @app.get("/api/solves/{mode}")
+    async def get_solves(mode: str, scope: str = "session", flagged: bool = False,
+                         limit: int = 200):
+        """Rows for the Statistics table, each with its ao5 / ao12, plus the total in scope."""
+        check_mode(mode)
+        if scope not in ("session", "all"):
+            raise HTTPException(400, f"unknown scope {scope!r}")
+        rows, total = db.solve_table(mode, scope, flagged_only=flagged,
+                                     limit=max(1, min(limit, 5000)))
+        return {"rows": jsonable(rows), "total": total, **stats(mode)}
+
+    @app.get("/api/stats/{mode}")
+    async def get_stats(mode: str):
+        check_mode(mode)
+        return stats(mode)
+
+    @app.put("/api/solves/{solve_id}/penalty")
+    async def put_penalty(solve_id: int, body: PenaltyChange):
+        mode, case = find_solve(solve_id)
+        if body.penalty not in PENALTIES:
+            raise HTTPException(400, f"unknown penalty {body.penalty!r}")
+        db.set_penalty(solve_id, body.penalty)
+        return times_after_change(mode, case)
+
+    @app.put("/api/solves/{solve_id}/flag")
+    async def put_flag(solve_id: int, body: FlagChange):
+        mode, case = find_solve(solve_id)
+        db.set_flag(solve_id, body.flagged, body.note)
+        return times_after_change(mode, case)
+
+    @app.delete("/api/solves/{solve_id}")
+    async def delete_solve(solve_id: int):
+        mode, case = find_solve(solve_id)
+        db.delete_solve(solve_id)
+        return times_after_change(mode, case)
+
+    @app.post("/api/session/{mode}")
+    async def new_session(mode: str):
+        """Start a new session: the session stats and history begin again."""
+        check_mode(mode)
+        db.new_session(mode)
+        return times_after_change(mode, None)
 
     @app.get("/api/summary/{mode}")
     async def summary(mode: str):

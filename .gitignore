@@ -1,4 +1,6 @@
 __pycache__/
+# copy of the database made before it gained the session columns (Database._add_solve_columns)
+*.before-sessions.db
 *.pyc
 pytest-cache-files-*/
 

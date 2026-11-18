@@ -7,6 +7,7 @@ Times stored in SQLite for progress tracking.
 Requirements: pip install rich
 """
 
+import math
 import time
 import sqlite3
 import json
@@ -237,8 +238,23 @@ def _merge_u(moves):
 # =============================================================================
 # TIME UTILITIES
 # =============================================================================
+DNF = math.inf                      # a DNF counts as infinitely slow in averages
+PENALTIES = (None, "+2", "dnf")      # times.penalty: none, plus two seconds, did not finish
+
+
+def effective(seconds, penalty):
+    """A solve's time once its penalty is applied (DNF for a DNF)."""
+    if penalty == "dnf":
+        return DNF
+    return seconds + 2 if penalty == "+2" else seconds
+
+
 def fmt(seconds):
-    """Format seconds as M:SS.cc or SS.cc."""
+    """Format seconds as M:SS.cc or SS.cc ("DNF" for a DNF, "—" for None)."""
+    if seconds is None:
+        return "—"
+    if seconds == DNF:
+        return "DNF"
     if seconds < 60:
         return f"{seconds:.2f}"
     m = int(seconds // 60)
@@ -246,21 +262,83 @@ def fmt(seconds):
     return f"{m}:{s:05.2f}"
 
 
+def fmt_solve(seconds, penalty):
+    """A solve as shown in a history: 12.34, 14.34+ (a +2) or DNF."""
+    if penalty == "dnf":
+        return "DNF"
+    return fmt(effective(seconds, penalty)) + ("+" if penalty == "+2" else "")
+
+
 def calc_ao(times, n):
-    """Average of n, trimming best and worst. Returns None if not enough times."""
+    """
+    Average of the latest n times (newest first), trimming the best and worst
+    5% (at least one each side), as WCA and csTimer do. A DNF (math.inf) counts
+    as the worst time, so one DNF is trimmed and two make the average a DNF.
+    Returns None if there are fewer than n times.
+    """
     if len(times) < n:
         return None
     recent = sorted(times[:n])
     if n <= 2:
         return sum(recent) / n
-    return sum(recent[1:-1]) / (n - 2)
+    trim = max(1, math.ceil(n * 0.05))
+    kept = recent[trim:-trim]
+    return sum(kept) / len(kept)
+
+
+def best_ao(times, n):
+    """The best average of n over every run of n consecutive times, or None."""
+    best = None
+    for i in range(len(times) - n + 1):
+        a = calc_ao(times[i:i + n], n)
+        if best is None or a < best:
+            best = a
+    return best
+
+
+def solve_stats(times):
+    """
+    Summary of a list of times, newest first, penalties applied (DNF = math.inf):
+    count, dnf, best, worst, mean (DNFs left out of these three), current ao5 /
+    ao12 / ao50 / ao100 and the best ao5 / ao12. Missing values are None.
+    """
+    ok = [t for t in times if t != DNF]
+    stats = {
+        "count": len(times),
+        "dnf":   len(times) - len(ok),
+        "best":  min(ok) if ok else None,
+        "worst": max(ok) if ok else None,
+        "mean":  sum(ok) / len(ok) if ok else None,
+    }
+    for n in (5, 12, 50, 100):
+        stats[f"ao{n}"] = calc_ao(times, n)
+    for n in (5, 12):
+        stats[f"best_ao{n}"] = best_ao(times, n)
+    return stats
 
 
 # =============================================================================
 # DATABASE
 # =============================================================================
+# A solve that has no DNF, and its time with any +2 added, for SQL queries.
+_NOT_DNF   = "(penalty IS NULL OR penalty != 'dnf')"
+_EFFECTIVE = "(seconds + CASE WHEN penalty = '+2' THEN 2 ELSE 0 END)"
+_SOLVE_COLS = "id,case_name,seconds,penalty,flagged,note,ts,session"
+
+
 class Database:
+    """
+    The SQLite store shared by the terminal app, the GUI and the web app.
+
+    Every attempt is a row in `times`. Besides its raw time it has a penalty
+    (None, "+2" or "dnf"), a flag with an optional note, and the number of the
+    practice session it belongs to. Each mode has its own current session
+    (table `sessions`); new_session() starts the next one, so "session" stats
+    cover the attempts since then and "all time" stats cover every attempt.
+    """
+
     def __init__(self, path):
+        self.path = Path(path)
         self.conn = sqlite3.connect(str(path))
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS times (
@@ -295,7 +373,125 @@ class Database:
                 PRIMARY KEY (mode, group_name, case_name)
             )
         """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                mode    TEXT PRIMARY KEY,
+                current INTEGER NOT NULL
+            )
+        """)
+        self._add_solve_columns()
         self.conn.commit()
+
+    def _add_solve_columns(self):
+        """Give an older database the penalty / flag / note / session columns."""
+        have = {r[1] for r in self.conn.execute("PRAGMA table_info(times)")}
+        new = [(name, decl) for name, decl in (
+            ("penalty", "TEXT"),
+            ("flagged", "INTEGER NOT NULL DEFAULT 0"),
+            ("note",    "TEXT"),
+            ("session", "INTEGER NOT NULL DEFAULT 1"),
+        ) if name not in have]
+        if not new:
+            return
+        count = self.conn.execute("SELECT COUNT(*) FROM times").fetchone()[0]
+        if count:
+            # one copy of the old file, in case anything goes wrong
+            backup = self.path.with_name(self.path.stem + ".before-sessions.db")
+            if not backup.exists():
+                dest = sqlite3.connect(str(backup))
+                self.conn.backup(dest)
+                dest.close()
+                log.info("backed up %s to %s before adding columns", self.path.name, backup.name)
+        for name, decl in new:
+            self.conn.execute(f"ALTER TABLE times ADD COLUMN {name} {decl}")
+        log.info("added columns %s to times (%d rows)", [n for n, _ in new], count)
+
+    # --- sessions -----------------------------------------------------------
+    def current_session(self, mode):
+        row = self.conn.execute(
+            "SELECT current FROM sessions WHERE mode=?", (mode,)).fetchone()
+        return row[0] if row else 1
+
+    def new_session(self, mode):
+        """Start the next session in this mode; returns its number."""
+        n = self.current_session(mode) + 1
+        self.conn.execute(
+            "INSERT OR REPLACE INTO sessions (mode,current) VALUES (?,?)", (mode, n))
+        self.conn.commit()
+        log.info("%s: started session %d", mode, n)
+        return n
+
+    # --- single solves ----------------------------------------------------------
+    def solves(self, mode, scope="all", case_name=None, flagged_only=False, limit=None):
+        """
+        Attempts newest first, as tuples (id, case_name, seconds, penalty,
+        flagged, note, ts, session). scope is "session" or "all".
+        """
+        sql, args = f"SELECT {_SOLVE_COLS} FROM times WHERE mode=?", [mode]
+        if scope == "session":
+            sql += " AND session=?"
+            args.append(self.current_session(mode))
+        if case_name:
+            sql += " AND case_name=?"
+            args.append(case_name)
+        if flagged_only:
+            sql += " AND flagged=1"
+        sql += " ORDER BY id DESC"
+        if limit:
+            sql += " LIMIT ?"
+            args.append(limit)
+        return self.conn.execute(sql, args).fetchall()
+
+    def solve(self, solve_id):
+        """One attempt as (mode, id, case_name, seconds, penalty, flagged, note, ts, session), or None."""
+        return self.conn.execute(
+            f"SELECT mode,{_SOLVE_COLS} FROM times WHERE id=?", (solve_id,)).fetchone()
+
+    def set_penalty(self, solve_id, penalty):
+        if penalty not in PENALTIES:
+            raise ValueError(f"unknown penalty {penalty!r}")
+        self.conn.execute("UPDATE times SET penalty=? WHERE id=?", (penalty, solve_id))
+        self.conn.commit()
+        log.info("solve %s: penalty %s", solve_id, penalty or "none")
+
+    def set_flag(self, solve_id, flagged, note=None):
+        """Flag a solve (with an optional note) or unflag it (which drops the note)."""
+        note = (note or "").strip()[:200] or None
+        self.conn.execute("UPDATE times SET flagged=?, note=? WHERE id=?",
+                          (1 if flagged else 0, note if flagged else None, solve_id))
+        self.conn.commit()
+        log.info("solve %s: %s", solve_id, f"flagged ({note})" if flagged else "unflagged")
+
+    def delete_solve(self, solve_id):
+        cur = self.conn.execute("DELETE FROM times WHERE id=?", (solve_id,))
+        self.conn.commit()
+        log.info("deleted solve %s", solve_id)
+        return cur.rowcount > 0
+
+    def solve_table(self, mode, scope="all", flagged_only=False, limit=None):
+        """
+        (rows, total) for a statistics table: rows are dicts, newest first, with
+        the solve's fields plus `time` (penalty applied) and the ao5 / ao12
+        ending at that solve. The averages are worked out over every solve in
+        scope, so they are right even when only flagged solves are listed.
+        """
+        all_rows = self.solves(mode, scope)
+        times = [effective(r[2], r[3]) for r in all_rows]
+        out = []
+        for i, r in enumerate(all_rows):
+            if flagged_only and not r[4]:
+                continue
+            out.append({"n": len(all_rows) - i, "id": r[0], "case": r[1], "seconds": r[2], "penalty": r[3],
+                        "flagged": bool(r[4]), "note": r[5], "ts": r[6], "session": r[7],
+                        "time": times[i],
+                        "ao5": calc_ao(times[i:], 5), "ao12": calc_ao(times[i:], 12)})
+            if limit and len(out) >= limit:
+                break
+        return out, len(all_rows)
+
+    def stats(self, mode, scope="all"):
+        """solve_stats() of every attempt in this mode, or of the current session."""
+        return solve_stats([effective(r[2], r[3]) for r in self.solves(mode, scope)])
 
     def get_custom_groups(self, mode):
         """{group name: set of case names} for the user's own groups."""
@@ -350,8 +546,8 @@ class Database:
     def recent_means(self, mode, n=5):
         """{case name: mean of its latest n times}."""
         cur = self.conn.execute(
-            "SELECT case_name,seconds FROM times WHERE mode=? AND case_name IS NOT NULL "
-            "ORDER BY rowid DESC", (mode,))
+            f"SELECT case_name,{_EFFECTIVE} FROM times WHERE mode=? AND case_name IS NOT NULL "
+            f"AND {_NOT_DNF} ORDER BY rowid DESC", (mode,))
         latest = {}
         for name, seconds in cur:
             times = latest.setdefault(name, [])
@@ -374,36 +570,42 @@ class Database:
         self.conn.commit()
 
     def recent(self, mode, limit=40):
-        """Latest attempts in a mode, newest first: (case_name, seconds, ts)."""
+        """Latest attempts in a mode, newest first: (case_name, time, ts), penalty applied."""
         cur = self.conn.execute(
-            "SELECT case_name,seconds,ts FROM times WHERE mode=? ORDER BY rowid DESC LIMIT ?",
+            "SELECT case_name,seconds,penalty,ts FROM times WHERE mode=? ORDER BY rowid DESC LIMIT ?",
             (mode, limit),
         )
-        return cur.fetchall()
+        return [(c, effective(s, p), ts) for c, s, p, ts in cur]
 
     def add(self, mode, seconds, case_name=None, scramble=None):
-        self.conn.execute(
-            "INSERT INTO times (mode,case_name,seconds,scramble) VALUES (?,?,?,?)",
-            (mode, case_name, seconds, scramble),
+        """Record an attempt in the current session; returns its id."""
+        cur = self.conn.execute(
+            "INSERT INTO times (mode,case_name,seconds,scramble,session) VALUES (?,?,?,?,?)",
+            (mode, case_name, seconds, scramble, self.current_session(mode)),
         )
         self.conn.commit()
+        return cur.lastrowid
 
     def get(self, mode, case_name=None, limit=100):
+        """Latest (time, ts) pairs, newest first; time has the penalty applied (DNF = inf)."""
         if case_name:
             cur = self.conn.execute(
-                "SELECT seconds,ts FROM times WHERE mode=? AND case_name=? ORDER BY rowid DESC LIMIT ?",
+                "SELECT seconds,penalty,ts FROM times WHERE mode=? AND case_name=? "
+                "ORDER BY rowid DESC LIMIT ?",
                 (mode, case_name, limit),
             )
         else:
             cur = self.conn.execute(
-                "SELECT seconds,ts FROM times WHERE mode=? ORDER BY rowid DESC LIMIT ?",
+                "SELECT seconds,penalty,ts FROM times WHERE mode=? ORDER BY rowid DESC LIMIT ?",
                 (mode, limit),
             )
-        return cur.fetchall()
+        return [(effective(s, p), ts) for s, p, ts in cur]
 
     def case_summary(self, mode):
         cur = self.conn.execute(
-            "SELECT case_name,COUNT(*),MIN(seconds),AVG(seconds) "
+            f"SELECT case_name,COUNT(*),"
+            f"MIN(CASE WHEN {_NOT_DNF} THEN {_EFFECTIVE} END),"
+            f"AVG(CASE WHEN {_NOT_DNF} THEN {_EFFECTIVE} END) "
             "FROM times WHERE mode=? GROUP BY case_name ORDER BY case_name",
             (mode,),
         )
@@ -509,8 +711,9 @@ def show_session(rows, title):
     console.print(tbl)
 
     # Summary stats panel
-    best  = min(all_t)
-    mean  = sum(all_t) / len(all_t)
+    ok    = [t for t in all_t if t != DNF]       # best and mean leave out DNFs
+    best  = min(ok) if ok else DNF
+    mean  = sum(ok) / len(ok) if ok else DNF
     ao5   = calc_ao(all_t, 5)
     ao12  = calc_ao(all_t, 12)
     ao50  = calc_ao(all_t, 50)

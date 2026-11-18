@@ -22,6 +22,15 @@ def rows(mode):
     with sqlite3.connect(tmp) as c:
         return c.execute("SELECT COUNT(*) FROM times WHERE mode=?", (mode,)).fetchone()[0]
 
+def rows_where(cond):
+    with sqlite3.connect(tmp) as c:
+        return c.execute(f"SELECT COUNT(*) FROM times WHERE {cond}").fetchone()[0]
+
+def last_penalty(mode):
+    with sqlite3.connect(tmp) as c:
+        return c.execute("SELECT penalty FROM times WHERE mode=? ORDER BY id DESC LIMIT 1",
+                         (mode,)).fetchone()[0]
+
 results = []
 def check(name, cond, detail=""): results.append((name, bool(cond), detail))
 errors = []
@@ -58,6 +67,35 @@ with sync_playwright() as p:
     check("full next scramble", page.inner_text(".shown .scramble-box") != old and page.locator(".shown .timer.running").count() == 0)
     page.click("text=Delete Last"); page.wait_for_timeout(200)
     check("full delete last", rows("full") == n0)
+
+    # --- sessions: penalties, flags, delete any solve, new session
+    answers = []
+    on_dialog = lambda d: d.accept(answers.pop(0) if answers else "")
+    page.on("dialog", on_dialog)
+    for _ in range(2):
+        page.keyboard.press("Space"); page.wait_for_timeout(120)
+        page.keyboard.press("Space"); page.wait_for_timeout(250)
+        page.keyboard.press("Space"); page.wait_for_timeout(50)
+    page.click(".shown .last-solve button[data-act=dnf]"); page.wait_for_timeout(250)
+    check("last solve DNF", last_penalty("full") == "dnf")
+    check("history shows DNF", page.inner_text(".shown .history.solves li[data-id] .time") == "DNF")
+    page.click(".shown .last-solve button[data-act='+2']"); page.wait_for_timeout(250)
+    check("last solve +2", last_penalty("full") == "+2")
+    page.locator(".shown .history.solves li[data-id]").nth(1).click()
+    answers.append("check test")
+    page.click(".shown .history.solves li.actions button[data-act=flag]"); page.wait_for_timeout(250)
+    check("flag with note", rows_where("flagged=1 AND note='check test'") == 1)
+    n1 = rows("full")
+    page.locator(".shown .history.solves li[data-id]").first.click()
+    page.click(".shown .history.solves li.actions button[data-act=delete]"); page.wait_for_timeout(250)
+    check("delete a solve from the history", rows("full") == n1 - 1)
+    all_n = page.evaluate("window.cubeApp.store.stats.full.all.count")
+    page.click(".shown .session-head button"); page.wait_for_timeout(250)
+    st = page.evaluate("window.cubeApp.store.stats.full")
+    check("new session", st["session"]["count"] == 0 and st["all"]["count"] == all_n
+          and page.locator(".shown .history.solves li[data-id]").count() == 0)
+    page.screenshot(path=os.path.join(SHOTS, "web_full_session.png"))
+    page.remove_listener("dialog", on_dialog)
 
     # --- screen switching speed
     sw = page.evaluate("""async () => { const out = {};
@@ -191,11 +229,17 @@ with sync_playwright() as p:
     check("gallery dblclick keeps selection", page.evaluate("window.cubeApp.store.selected.oll.has('OLL 45')") == was)
 
     # --- stats
-    page.goto(URL + "#stats"); page.wait_for_selector(".shown table.stats, .shown p.muted")
-    check("stats full table", page.locator(".shown table.stats tr").count() > 1 or True)
-    page.click(".shown .seg >> text=OLL Progress"); page.wait_for_timeout(150)
+    page.goto(URL + "#stats"); page.wait_for_selector(".shown table.stat-block")
+    page.click(".shown .stats-filters button[data-key=all]"); page.wait_for_timeout(300)
+    check("stats all-time solves", page.locator(".shown table.solves-table tbody tr").count() >= 1)
+    page.check(".shown .stats-filters input[type=checkbox]"); page.wait_for_timeout(300)
+    flagged = page.locator(".shown table.solves-table tbody tr").count()
+    check("stats flagged only", flagged == rows_where("flagged=1 AND mode='full'"), flagged)
+    page.uncheck(".shown .stats-filters input[type=checkbox]"); page.wait_for_timeout(300)
+    page.click(".shown .tabs button[data-key=oll]"); page.wait_for_timeout(150)
+    page.click(".shown .stats-filters button[data-key=cases]"); page.wait_for_timeout(300)
     check("stats oll table", page.locator(".shown table.stats tbody tr").count() == 57)
-    page.click(".shown .seg >> text=PLL Progress"); page.wait_for_timeout(150)
+    page.click(".shown .tabs button[data-key=pll]"); page.wait_for_timeout(300)
     check("stats pll table", page.locator(".shown table.stats tbody tr").count() == 21)
     page.screenshot(path=os.path.join(SHOTS, "web_stats.png"))
 
