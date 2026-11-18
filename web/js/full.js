@@ -4,8 +4,9 @@
 
 import { api } from "./api.js";
 import { Timer } from "./timer.js";
-import { h, fmt, eff, generateScramble, resultBar } from "./util.js";
+import { h, eff, fmtSolve, generateScramble, resultBar } from "./util.js";
 import { sessionPanel, lastSolveBar } from "./solves.js";
+import { timerOptions } from "./options.js";
 
 const READY = "Press SPACE or Start to begin";
 
@@ -34,12 +35,15 @@ export function fullScreen(store) {
 
   const timer = new Timer(timerLabel, startBtn, {
     onNext: newScramble,
-    onStop(seconds) {
+    options: () => store.timerOptions("full"),
+    onStop(seconds, penalty) {
       // show it at once; the server's answer replaces the local guess
-      store.recent.full.unshift({ id: null, case: null, seconds, penalty: null, flagged: false, note: null, ts: "" });
+      store.recent.full.unshift({ id: null, case: null, seconds, penalty, flagged: false, note: null, ts: "" });
       refreshTimes();
-      statusLine.textContent = `Saved  ${fmt(seconds)}  —  press SPACE for next scramble`;
-      api.addTime({ mode: "full", seconds, scramble }).then((r) => store.applyTimes("full", null, r));
+      const shown = fmtSolve({ seconds, penalty });
+      statusLine.textContent = penalty === "dnf" ? "DNF: inspection went past 17 s  —  press SPACE for next scramble"
+        : `Saved  ${shown}${penalty ? "  (inspection over 15 s)" : ""}  —  press SPACE for next scramble`;
+      api.addTime({ mode: "full", seconds, scramble, penalty }).then((r) => store.applyTimes("full", null, r));
     },
   });
   startBtn.onclick = () => timer.toggle();
@@ -64,7 +68,8 @@ export function fullScreen(store) {
         },
       })),
     last.el,
-    result);
+    result,
+    timerOptions(store, "full").el);
 
   const el = h("section.screen", null,
     h("div.trainer", null, main, h("div.side", null, session.el)));

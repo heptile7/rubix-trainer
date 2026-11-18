@@ -116,6 +116,22 @@ with TestClient(app) as c:
     if len(only["sessions"]) == 1:
         check("last session can't be deleted",
               c.delete(f"/api/session/pll/{only['session_no']}").status_code == 400)
+    # settings and attempts recorded with an inspection penalty
+    s0 = c.get("/api/settings").json()
+    check("default settings", s0["hold_to_start"] is True and s0["inspection.full"] is False
+          and s0["inspection_seconds.oll"] == 8, s0)
+    s1 = c.put("/api/settings", json={"values": {"inspection.full": True, "hold_ms": 550}}).json()
+    check("save settings", s1["inspection.full"] is True and s1["hold_ms"] == 550
+          and c.get("/api/bootstrap").json()["settings"]["hold_ms"] == 550)
+    check("bad setting 400", c.put("/api/settings", json={"values": {"hold_ms": 7}}).status_code == 400
+          and c.put("/api/settings", json={"values": {"nope": 1}}).status_code == 400
+          and c.put("/api/settings", json={"values": {"inspection.oll": "yes"}}).status_code == 400)
+    r = c.post("/api/times", json={"mode": "full", "seconds": 12.0, "penalty": "+2"}).json()
+    check("attempt with +2", r["recent"][0]["penalty"] == "+2")
+    r = c.post("/api/times", json={"mode": "full", "seconds": 0, "penalty": "dnf"}).json()
+    check("inspection DNF (0 s)", r["recent"][0]["penalty"] == "dnf")
+    check("0 s without DNF 400", c.post("/api/times", json={"mode": "full", "seconds": 0}).status_code == 400)
+    c.delete("/api/times/last/full"); c.delete("/api/times/last/full")
     r = c.delete(f"/api/solves/{oll_id}").json()
     check("delete any solve", r["case"] == "OLL 21" and c.delete(f"/api/solves/{oll_id}").status_code == 404)
     r = c.post("/api/times", json={"mode": "oll", "case": "OLL 21", "seconds": 3.21}).json()

@@ -37,9 +37,9 @@ If one turn did several unrelated changes, make one commit per change: stage eac
    | compile | every changed `.py` | every script byte-compiles |
    | algorithms | `cube_timer.py`, `cube_diagram.py` | `cube_diagram.py` prints "All OLL and PLL algorithms check out." |
    | cli | `cube_timer.py` | the terminal app, driven by scripted input |
-   | gui | GUI, data layer, scrambles | the customtkinter app, driven headlessly (78 checks, about 50 s) |
+   | gui | GUI, data layer, scrambles | the customtkinter app, driven headlessly (86 checks, about 50 s) |
    | api | `cube_web.py`, `web/`, data layer | the API through TestClient, including that every case's scramble really sets it up |
-   | web | `cube_web.py`, `web/`, data layer | the page in headless Chrome through Playwright (55 checks). Screenshots go to a temp folder; look at them when the layout changed |
+   | web | `cube_web.py`, `web/`, data layer | the page in headless Chrome through Playwright (64 checks). Screenshots go to a temp folder; look at them when the layout changed |
 
    Every check uses a temporary copy of `cube_times.db` and fails if the real one changes. `api` and `web` need `httpx` and `playwright`, which are test-only. If either is missing, run `pip install httpx playwright`; Playwright uses the installed Chrome, so there's no browser download.
 

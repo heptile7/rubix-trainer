@@ -98,6 +98,15 @@ Two small differences in the web app:
 
 **Space** starts the timer, stops it, then moves on to the next scramble or case. Each time is saved when the timer stops; **Delete Last** removes the most recent one.
 
+### Inspection and hold to start
+
+The switches under the timer change how a solve starts. They are saved and shared by the web app and the desktop app.
+
+- **Hold to start** (on by default): hold Space; the timer turns **red**, then **green** once you've held it long enough (0.3 s, 0.55 s or 1 s). Release to start the clock. Letting go while it's still red does nothing. Space stops the clock the moment you press it.
+- **Inspection** on Full Solve is WCA inspection: press and release Space to start a 15-second countdown, look over the cube, then start the solve as usual. Starting between 15 and 17 s adds **+2**; after 17 s the attempt is a **DNF**. *Call 8 / 12 s* (web app) says "eight seconds" and "twelve seconds".
+- **Inspection** on OLL / PLL practice is a plain countdown (5, 8, 12 or 15 s) for recognising the case. It never adds a penalty.
+- The **Start** button never needs holding; with inspection on, it starts the countdown first.
+
 ### Sessions, penalties and flags
 
 Full Solve, OLL and PLL each keep their own list of named **sessions**, for example one per cube (*GAN 12*, *MoYu OH*). The menu at the top of the session column picks the session that new solves go into; its history and stats show below, next to the **all-time** stats of every session together. **New…** creates a session (asking for a name), **Rename…** renames the selected one, and **Delete…** deletes it with its solves (after asking; the last session can't be deleted). Statistics has the same menu. **Delete Last** only removes solves from the selected session. The stats are: number of solves (and DNFs), best, worst, mean, the current ao5 / ao12 / ao50 / ao100, and the best ao5 and ao12.

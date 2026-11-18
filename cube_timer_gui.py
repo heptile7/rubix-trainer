@@ -8,6 +8,7 @@ Requirements: pip install customtkinter rich
 """
 
 import logging
+import math
 import random
 import sys
 import time
@@ -21,6 +22,8 @@ import customtkinter as ctk
 from cube_timer import (
     DNF,
     OLL_CASES,
+    SETTING_CHOICES,
+    WCA_INSPECTION,
     PLL_CASES,
     Database,
     calc_ao,
@@ -46,6 +49,7 @@ C_PANEL   = "#2b2b2b"        # panel / card background (case diagrams sit on it)
 C_CURRENT = "#454545"        # picker tile of the case being practised
 SIDE_WIDTH = 262             # practice pages' right-hand column (picker / history)
 
+C_HOLDING = "#ff4d4d"        # Space is down, not long enough to start yet
 C_DNF     = "#ff6b6b"        # a DNF in histories and tables
 C_PLUS2   = "#ff9f1c"        # a +2
 C_TEXT    = "#DCE4EE"        # ctk's label text colour, for plain tk labels
@@ -68,12 +72,35 @@ def _px(widget, size):
 # ---------------------------------------------------------------------------
 # Timer base class  (shared state machine for Full / OLL / PLL screens)
 # ---------------------------------------------------------------------------
+def timer_options(settings, mode):
+    """What the timer needs for a mode, from Database.get_settings() (like store.timerOptions)."""
+    on = settings[f"inspection.{mode}"]
+    return {
+        "inspection": (WCA_INSPECTION if mode == "full" else settings[f"inspection_seconds.{mode}"])
+                      if on else 0,
+        "wca":        mode == "full",
+        "hold":       settings["hold_ms"] / 1000 if settings["hold_to_start"] else 0,
+    }
+
+
 class TimerScreenBase(ctk.CTkFrame):
     """
-    Provides idle → running → stopped → idle state machine via timer_toggle().
-    Subclasses must create self.timer_label and self.start_btn in _build_ui(),
-    then implement _next() and _save_result(elapsed).
+    The timer state machine (a port of web/js/timer.js):
+
+        idle -> [inspecting] -> [holding -> ready] -> running -> stopped -> (next) idle
+
+    Space: timer_press() / timer_release(). The Start button: timer_toggle(),
+    which never holds. With inspection on, the first press-and-release starts
+    the countdown; with hold to start on, Space must be held until the timer
+    turns green, and releasing then starts the clock. A running clock stops on
+    the press. WCA inspection (Full Solve) gives +2 after 15 s and ends the
+    attempt as a DNF after 17 s; practice inspection has no penalties.
+
+    Subclasses create self.timer_label and self.start_btn, set self.mode, and
+    implement _next() and _save_result(elapsed, penalty).
     """
+
+    mode = "full"
 
     def __init__(self, parent, root, db):
         super().__init__(parent, fg_color="transparent")
@@ -82,16 +109,73 @@ class TimerScreenBase(ctk.CTkFrame):
 
         self._state       = "idle"
         self._start_time  = 0.0
+        self._insp_start  = 0.0
+        self._hold_start  = 0.0
+        self._hold_from   = "idle"
+        self._armed       = False    # idle + inspection: release starts the countdown
+        self._swallow     = False    # the next release belongs to a stop / next
+        self._penalty     = None
+        self._opts        = {"inspection": 0, "wca": False, "hold": 0}
         self._timer_id    = None
+        self.clock        = time.perf_counter    # replaceable in tests
 
     # ------------------------------------------------------------------
-    # Public interface
+    # Inputs
     # ------------------------------------------------------------------
-    def timer_toggle(self, event=None):
+    def timer_press(self, event=None):
+        now = self.clock()
+        self._swallow = False      # a new press: any release we were waiting for is past
+        if self._state == "running":
+            self._stop(now)
+            self._swallow = True
+            return
+        if self._state == "stopped":
+            self._next()
+            self._swallow = True
+            return
+        if self._state == "holding":
+            return
         if self._state == "idle":
-            self._start()
+            self._opts = timer_options(self.db.get_settings(), self.mode)
+            if self._opts["inspection"]:
+                self._armed = True
+                return
+        if self._opts["hold"]:
+            self._hold(now)
+        else:
+            self._start(now)
+
+    def timer_release(self, event=None):
+        now = self.clock()
+        if self._swallow:
+            self._swallow = False
+            return
+        if self._armed:
+            self._armed = False
+            if self._state == "idle":
+                self._inspect(now)
+            return
+        if self._state != "holding":
+            return
+        if now - self._hold_start >= self._opts["hold"]:
+            self._start(now)
+        else:
+            self._back()
+
+    def timer_toggle(self, event=None):
+        """The Start / Stop / Next button: instant, no holding."""
+        now = self.clock()
+        self._armed = self._swallow = False
+        if self._state == "idle":
+            self._opts = timer_options(self.db.get_settings(), self.mode)
+            if self._opts["inspection"]:
+                self._inspect(now)
+            else:
+                self._start(now)
+        elif self._state in ("inspecting", "holding"):
+            self._start(now)
         elif self._state == "running":
-            self._stop()
+            self._stop(now)
         elif self._state == "stopped":
             self._next()
 
@@ -101,34 +185,115 @@ class TimerScreenBase(ctk.CTkFrame):
             self.root.after_cancel(self._timer_id)
             self._timer_id = None
         self._state = "idle"
+        self._armed = self._swallow = False
+        self._hold_from = "idle"
         self._reset_display()
 
     # ------------------------------------------------------------------
-    # Internal state transitions
+    # States
     # ------------------------------------------------------------------
-    def _start(self):
-        self._start_time = time.perf_counter()
+    def _loop(self):
+        if self._timer_id:
+            self.root.after_cancel(self._timer_id)
+        self._tick()
+
+    def _inspect(self, now):
+        self._insp_start = now
+        self._state = "inspecting"
+        self.start_btn.configure(text="Start  [space]")
+        self.timer_label.configure(text_color=C_STOPPED)
+        self._loop()
+
+    def _hold(self, now):
+        self._hold_from = self._state
+        self._hold_start = now
+        self._state = "holding"
+        self.timer_label.configure(text_color=C_HOLDING)
+        self._loop()
+
+    def _back(self):
+        if self._hold_from == "inspecting":
+            self._state = "inspecting"
+            self.timer_label.configure(text_color=C_STOPPED)
+        else:
+            self._state = "idle"
+            self.timer_label.configure(text="0.00", text_color=C_IDLE)
+
+    def _start(self, now=None):
+        now = self.clock() if now is None else now
+        self._penalty = None
+        from_inspection = self._state == "inspecting" or (
+            self._state == "holding" and self._hold_from == "inspecting")
+        if self._opts.get("inspection") and self._opts.get("wca") and from_inspection:
+            used = now - self._insp_start
+            if used > WCA_INSPECTION + 2:
+                self._dnf()
+                return
+            if used > WCA_INSPECTION:
+                self._penalty = "+2"
+        self._start_time = now
+        self._hold_from  = "idle"
         self._state      = "running"
         self.start_btn.configure(text="Stop  [space]")
         self.timer_label.configure(text_color=C_RUNNING)
-        self._tick()
+        self._loop()
 
-    def _stop(self):
+    def _stop(self, now=None):
+        now = self.clock() if now is None else now
         if self._timer_id:
             self.root.after_cancel(self._timer_id)
             self._timer_id = None
-        elapsed      = time.perf_counter() - self._start_time
+        elapsed      = max(0.0, now - self._start_time)
         self._state  = "stopped"
         self.start_btn.configure(text="Next  [space]")
-        self.timer_label.configure(text=fmt(elapsed), text_color=C_STOPPED)
-        self._save_result(elapsed)
+        self.timer_label.configure(text=fmt_solve(elapsed, self._penalty), text_color=C_STOPPED)
+        self._save_result(elapsed, self._penalty)
+
+    def _dnf(self):
+        """WCA inspection ran past 17 s: the attempt is a DNF."""
+        if self._timer_id:
+            self.root.after_cancel(self._timer_id)
+            self._timer_id = None
+        self._state = "stopped"
+        self.start_btn.configure(text="Next  [space]")
+        self.timer_label.configure(text="DNF", text_color=C_DNF)
+        self._save_result(0.0, "dnf")
 
     def _tick(self):
-        if self._state != "running":
+        now = self.clock()
+        if self._state == "running":
+            self.timer_label.configure(text=fmt(now - self._start_time))
+        elif self._state == "holding":
+            ready = now - self._hold_start >= self._opts["hold"]
+            self.timer_label.configure(text_color=C_RUNNING if ready else C_HOLDING)
+            if self._hold_from == "inspecting":
+                self._inspection_text(now)
+        elif self._state == "inspecting":
+            if self._inspection_text(now):
+                return
+        else:
+            self._timer_id = None
             return
-        elapsed = time.perf_counter() - self._start_time
-        self.timer_label.configure(text=fmt(elapsed))
-        self._timer_id = self.root.after(50, self._tick)
+        self._timer_id = self.root.after(30, self._tick)
+
+    def _inspection_text(self, now):
+        """Countdown text; True when inspection ended the attempt (DNF)."""
+        used = now - self._insp_start
+        if self._opts.get("wca"):
+            if used > WCA_INSPECTION + 2:
+                if self._state == "inspecting":
+                    self._dnf()
+                    return True
+                text = "DNF"
+            elif used > WCA_INSPECTION:
+                text = "+2"
+            else:
+                text = str(max(0, math.ceil(self._opts["inspection"] - used)))
+        else:
+            text = str(max(0, math.ceil(self._opts["inspection"] - used)))
+        if self.timer_label.cget("text") != text:
+            self.timer_label.configure(text=text)
+        return False
 
     def _reset_display(self):
         self.timer_label.configure(text="0.00", text_color=C_IDLE)
@@ -326,6 +491,61 @@ class StatsBlock(tk.Frame):
         for (key, _), (a, b) in zip(self.rows, self.cells):
             a.configure(text=stat_text(session, key))
             b.configure(text=stat_text(all_time, key))
+
+
+class TimerOptions(ctk.CTkFrame):
+    """
+    Inspection and hold-to-start switches under a timer, saved as settings
+    (shared with the web app). Hold to start is one setting for every screen,
+    so screens call refresh() in on_show.
+    """
+
+    HOLD = {"0.3 s": 300, "0.55 s": 550, "1 s": 1000}
+
+    def __init__(self, parent, db, mode):
+        super().__init__(parent, fg_color="transparent")
+        self.db   = db
+        self.mode = mode
+        font = ctk.CTkFont(size=12)
+        small = dict(width=70, height=24, font=font, dynamic_resizing=False)
+        self.inspection = ctk.CTkCheckBox(
+            self, text="Inspection (WCA 15 s)" if mode == "full" else "Inspection",
+            font=font, checkbox_width=18, checkbox_height=18,
+            command=lambda: self._save(f"inspection.{mode}", bool(self.inspection.get())))
+        self.inspection.grid(row=0, column=0, padx=(0, 6))
+        col = 1
+        self.seconds = None
+        if mode == "full":
+            self.voice = None    # the spoken 8 / 12 s calls are web-only
+        else:
+            self.seconds = ctk.CTkOptionMenu(
+                self, values=[f"{n} s" for n in SETTING_CHOICES[f"inspection_seconds.{mode}"]],
+                command=lambda v: self._save(f"inspection_seconds.{mode}", int(v.split()[0])), **small)
+            self.seconds.grid(row=0, column=col, padx=(0, 18))
+            col += 1
+        self.hold = ctk.CTkCheckBox(
+            self, text="Hold to start", font=font, checkbox_width=18, checkbox_height=18,
+            command=lambda: self._save("hold_to_start", bool(self.hold.get())))
+        self.hold.grid(row=0, column=col, padx=(18 if mode == "full" else 0, 6))
+        self.hold_ms = ctk.CTkOptionMenu(self, values=list(self.HOLD),
+                                         command=lambda v: self._save("hold_ms", self.HOLD[v]),
+                                         **small)
+        self.hold_ms.grid(row=0, column=col + 1)
+        self.refresh()
+
+    def _save(self, key, value):
+        self.db.set_setting(key, value)
+        self.refresh()
+
+    def refresh(self):
+        st = self.db.get_settings()
+        (self.inspection.select if st[f"inspection.{self.mode}"] else self.inspection.deselect)()
+        (self.hold.select if st["hold_to_start"] else self.hold.deselect)()
+        self.hold_ms.set(next(k for k, v in self.HOLD.items() if v == st["hold_ms"]))
+        self.hold_ms.configure(state="normal" if st["hold_to_start"] else "disabled")
+        if self.seconds is not None:
+            self.seconds.set(f"{st[f'inspection_seconds.{self.mode}']} s")
+            self.seconds.configure(state="normal" if st[f"inspection.{self.mode}"] else "disabled")
 
 
 class SessionPicker(ctk.CTkFrame):
@@ -629,12 +849,15 @@ class FullSolveScreen(TimerScreenBase):
         self.result_label = ctk.CTkLabel(
             self, text="", font=ctk.CTkFont(size=13), text_color="gray65",
         )
-        self.result_label.grid(row=6, column=0, pady=(4, 24))
+        self.result_label.grid(row=6, column=0, pady=(4, 4))
+
+        self.options = TimerOptions(self, self.db, "full")
+        self.options.grid(row=7, column=0, pady=(0, 24))
 
         # Right-hand column: the current session
         self.grid_columnconfigure(1, weight=2, minsize=SIDE_WIDTH)
         side = ctk.CTkFrame(self, fg_color=C_PANEL, corner_radius=8, width=SIDE_WIDTH)
-        side.grid(row=0, column=1, rowspan=7, padx=(0, 16), pady=16, sticky="nsew")
+        side.grid(row=0, column=1, rowspan=8, padx=(0, 16), pady=16, sticky="nsew")
         side.grid_propagate(False)
         side.grid_columnconfigure(0, weight=1)
         side.grid_rowconfigure(0, weight=1)
@@ -643,8 +866,9 @@ class FullSolveScreen(TimerScreenBase):
         self.session.grid(row=0, column=0, padx=4, pady=8, sticky="nsew")
 
     def on_show(self):
-        """Solves may have been changed on the Statistics screen."""
+        """Solves may have been changed on the Statistics screen, settings elsewhere."""
         self.session.refresh()
+        self.options.refresh()
         self._refresh_times()
 
     # ------------------------------------------------------------------
@@ -658,10 +882,16 @@ class FullSolveScreen(TimerScreenBase):
     def _next(self):
         self._new_scramble()
 
-    def _save_result(self, elapsed):
-        self.db.add("full", elapsed, scramble=self._scramble)
-        log.info("full solve: %s", fmt(elapsed))
-        self.status_label.configure(text=f"Saved  {fmt(elapsed)}  —  press SPACE for next scramble")
+    def _save_result(self, elapsed, penalty=None):
+        self.db.add("full", elapsed, scramble=self._scramble, penalty=penalty)
+        log.info("full solve: %s", fmt_solve(elapsed, penalty))
+        if penalty == "dnf":
+            text = "DNF: inspection went past 17 s  —  press SPACE for next scramble"
+        else:
+            text = (f"Saved  {fmt_solve(elapsed, penalty)}"
+                    + ("  (inspection over 15 s)" if penalty else "")
+                    + "  —  press SPACE for next scramble")
+        self.status_label.configure(text=text)
         self.session.refresh()
         self._refresh_times()
 
@@ -1281,7 +1511,10 @@ class CaseTrainerScreen(TimerScreenBase):
         self.result_label = ctk.CTkLabel(
             self, text="", font=ctk.CTkFont(size=13), text_color="gray65",
         )
-        self.result_label.grid(row=8, column=0, pady=(4, 16))
+        self.result_label.grid(row=8, column=0, pady=(4, 2))
+
+        self.options = TimerOptions(self, self.db, self.mode)
+        self.options.grid(row=9, column=0, pady=(0, 14))
 
         self._build_side()
 
@@ -1291,7 +1524,7 @@ class CaseTrainerScreen(TimerScreenBase):
         self.grid_columnconfigure(0, weight=3)
         self.grid_columnconfigure(1, weight=2, minsize=SIDE_WIDTH)
         side = ctk.CTkFrame(self, fg_color=C_PANEL, corner_radius=8, width=SIDE_WIDTH)
-        side.grid(row=0, column=1, rowspan=9, padx=(0, 16), pady=(16, 16), sticky="nsew")
+        side.grid(row=0, column=1, rowspan=10, padx=(0, 16), pady=(16, 16), sticky="nsew")
         side.grid_propagate(False)
         side.grid_columnconfigure(0, weight=1)
         side.grid_rowconfigure(1, weight=1)
@@ -1523,11 +1756,11 @@ class CaseTrainerScreen(TimerScreenBase):
     def _next(self):
         self._pick_next_case()
 
-    def _save_result(self, elapsed):
+    def _save_result(self, elapsed, penalty=None):
         if not self._current_case:
             return
-        self.db.add(self.mode, elapsed,
-                    case_name=self._current_case["name"], scramble=self._scramble)
+        self.db.add(self.mode, elapsed, case_name=self._current_case["name"],
+                    scramble=self._scramble, penalty=penalty)
         log.info("%s attempt: %s %s", self.mode, self._current_case["name"], fmt(elapsed))
         self.status_label.configure(text=f"Saved  {fmt(elapsed)}  —  press SPACE for next case")
         self._refresh_history()
@@ -2013,7 +2246,9 @@ class CubeTimerApp:
 
         self.show_screen("full")
 
-        self.root.bind("<KeyPress-space>", self._dispatch_space, add="+")
+        self._space_down = False
+        self.root.bind("<KeyPress-space>", self._space_press, add="+")
+        self.root.bind("<KeyRelease-space>", self._space_release, add="+")
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         # errors inside button/key callbacks would otherwise only reach stderr
         self.root.report_callback_exception = self._report_callback_exception
@@ -2116,11 +2351,20 @@ class CubeTimerApp:
         if name == "stats":
             target.refresh()
 
-    def _dispatch_space(self, event):
+    def _space_press(self, event):
+        """Space down: Windows repeats KeyPress while the key is held, so only the first counts."""
+        if self._space_down or isinstance(event.widget, ctk.CTkButton):
+            return
+        self._space_down = True
+        if hasattr(self._active_screen, "timer_press"):
+            self._active_screen.timer_press(event)
+
+    def _space_release(self, event):
+        self._space_down = False
         if isinstance(event.widget, ctk.CTkButton):
             return
-        if hasattr(self._active_screen, "timer_toggle"):
-            self._active_screen.timer_toggle(event)
+        if hasattr(self._active_screen, "timer_release"):
+            self._active_screen.timer_release(event)
 
     @staticmethod
     def _report_callback_exception(exc_type, exc, tb):

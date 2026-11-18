@@ -63,17 +63,24 @@ function show(name) {
 
 window.addEventListener("hashchange", () => show(location.hash.slice(1)));
 
-// Space starts / stops the timer wherever focus is, except in text fields.
-// Keydown, not keyup: the clock starts the moment the key goes down.
+// Space drives the timer wherever focus is, except in text fields: keydown
+// is Timer.press, keyup Timer.release (hold to start and inspection need both;
+// a running clock stops on keydown, the moment the key goes down).
 const typing = (el) => el && (el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && el.type === "text"));
 window.addEventListener("keydown", (e) => {
   if (e.code !== "Space" || typing(e.target)) return;
   e.preventDefault();                 // no page scroll, no button press
   if (e.repeat || !active?.timer) return;
-  active.timer.toggle(e.timeStamp);
+  active.timer.press(e.timeStamp);
 });
 window.addEventListener("keyup", (e) => {
-  if (e.code === "Space" && !typing(e.target)) e.preventDefault();
+  if (e.code !== "Space" || typing(e.target)) return;
+  e.preventDefault();
+  active?.timer?.release(e.timeStamp);
+});
+// a clicked control would otherwise keep focus and swallow the next Space
+document.addEventListener("change", (e) => {
+  if (e.target.tagName === "SELECT" || e.target.type === "checkbox") e.target.blur();
 });
 // a clicked control would otherwise keep focus and swallow the next Space
 document.addEventListener("change", (e) => { if (e.target.tagName === "SELECT") e.target.blur(); });

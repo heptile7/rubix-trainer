@@ -61,7 +61,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from cube_diagram import case_diagram, case_weight, scramble_state, state_diagram
-from cube_timer import (DNF, OLL_CASES, PENALTIES, PLL_CASES, Database, effective,
+from cube_timer import (DNF, OLL_CASES, PENALTIES, PLL_CASES, Database, check_setting, effective,
                         setup_logging, setup_scramble)
 
 log = logging.getLogger("cube_timer.web")
@@ -110,6 +110,7 @@ class Attempt(BaseModel):
     case: str | None = None
     seconds: float
     scramble: str | None = None
+    penalty: str | None = None      # +2 / dnf from inspection
 
 
 class Names(BaseModel):
@@ -123,6 +124,10 @@ class StatusChange(BaseModel):
 
 class PenaltyChange(BaseModel):
     penalty: str | None = None      # None, "+2" or "dnf"
+
+
+class Settings(BaseModel):
+    values: dict
 
 
 class SessionName(BaseModel):
@@ -232,6 +237,7 @@ def create_app(db_path=DB_PATH):
             "state":      user_state(),
             "recent":     {m: recent(m) for m in MODES},
             "stats":      {m: stats(m) for m in MODES},
+            "settings":   db.get_settings(),
             "case_times": {m: case_times(m) for m in CASES},
         }
 
@@ -287,10 +293,12 @@ def create_app(db_path=DB_PATH):
         check_mode(a.mode)
         if a.mode != "full":
             check_names(a.mode, [a.case])
-        if not 0 < a.seconds < 24 * 3600:
+        if not 0 <= a.seconds < 24 * 3600 or (a.seconds == 0 and a.penalty != "dnf"):
             raise HTTPException(400, "time out of range")
+        if a.penalty not in PENALTIES:
+            raise HTTPException(400, f"unknown penalty {a.penalty!r}")
         case = a.case if a.mode != "full" else None
-        sid = db.add(a.mode, a.seconds, case_name=case, scramble=a.scramble)
+        sid = db.add(a.mode, a.seconds, case_name=case, scramble=a.scramble, penalty=a.penalty)
         log.info("%s attempt: %s %.2f", a.mode, a.case or "-", a.seconds)
         return {"id": sid, **times_after_change(a.mode, case)}
 
@@ -382,6 +390,20 @@ def create_app(db_path=DB_PATH):
         except ValueError as exc:
             raise HTTPException(400, str(exc))
         return times_after_change(mode, None)
+
+    @app.get("/api/settings")
+    async def get_settings():
+        return db.get_settings()
+
+    @app.put("/api/settings")
+    async def put_settings(body: Settings):
+        """Save some settings (inspection, hold to start); returns all of them."""
+        problems = [p for p in (check_setting(k, v) for k, v in body.values.items()) if p]
+        if problems:
+            raise HTTPException(400, "; ".join(problems))
+        for key, value in body.values.items():
+            db.set_setting(key, value)
+        return db.get_settings()
 
     @app.get("/api/summary/{mode}")
     async def summary(mode: str):

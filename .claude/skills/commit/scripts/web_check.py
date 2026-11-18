@@ -26,6 +26,10 @@ def rows_where(cond):
     with sqlite3.connect(tmp) as c:
         return c.execute(f"SELECT COUNT(*) FROM times WHERE {cond}").fetchone()[0]
 
+def rows_table(table, cond):
+    with sqlite3.connect(tmp) as c:
+        return c.execute(f"SELECT COUNT(*) FROM {table} WHERE {cond}").fetchone()[0]
+
 def last_penalty(mode):
     with sqlite3.connect(tmp) as c:
         return c.execute("SELECT penalty FROM times WHERE mode=? ORDER BY id DESC LIMIT 1",
@@ -53,9 +57,13 @@ with sync_playwright() as p:
     check("screen build times (ms)", True, str(page.evaluate("window.cubeApp.timings")))
     page.screenshot(path=os.path.join(SHOTS, "web_full.png"))
 
+    # Hold to start is on by default: Space must be held until the timer turns green.
+    def start():
+        page.keyboard.down("Space"); page.wait_for_timeout(400); page.keyboard.up("Space")
+
     # --- Full solve: space start / stop / next
     n0 = rows("full")
-    page.keyboard.press("Space"); page.wait_for_timeout(350)
+    start(); page.wait_for_timeout(350)
     check("full running", page.locator(".shown .timer.running").count() == 1)
     page.keyboard.press("Space")
     check("full stopped", page.locator(".shown .timer.stopped").count() == 1, page.inner_text(".shown .timer"))
@@ -68,12 +76,37 @@ with sync_playwright() as p:
     page.click("text=Delete Last"); page.wait_for_timeout(200)
     check("full delete last", rows("full") == n0)
 
+    # --- hold to start and inspection
+    state = lambda: page.evaluate("window.cubeApp.screens.full.timer.state")
+    page.keyboard.down("Space"); page.wait_for_timeout(100)
+    check("hold: red while held", "holding" in page.get_attribute(".shown .timer", "class"))
+    page.keyboard.up("Space"); page.wait_for_timeout(50)
+    check("hold: short hold doesn't start", state() == "idle", state())
+    page.keyboard.down("Space"); page.wait_for_timeout(400)
+    check("hold: green when ready", "ready" in page.get_attribute(".shown .timer", "class"))
+    page.keyboard.up("Space"); page.wait_for_timeout(100)
+    check("hold: release starts", state() == "running", state())
+    page.keyboard.press("Space"); page.wait_for_timeout(250); page.keyboard.press("Space")
+    page.click(".shown .timer-options label:has-text('Inspection') input"); page.wait_for_timeout(200)
+    page.keyboard.press("Space"); page.wait_for_timeout(150)
+    check("inspection counts down", state() == "inspecting" and page.inner_text(".shown .timer") in ("15", "14"))
+    page.evaluate("window.cubeApp.screens.full.timer._inspStart -= 15500"); page.wait_for_timeout(100)
+    check("inspection +2 shown", page.inner_text(".shown .timer") == "+2")
+    start(); page.wait_for_timeout(150); page.keyboard.press("Space"); page.wait_for_timeout(300)
+    check("inspection +2 saved", last_penalty("full") == "+2")
+    page.keyboard.press("Space"); page.keyboard.press("Space"); page.wait_for_timeout(100)
+    page.evaluate("window.cubeApp.screens.full.timer._inspStart -= 17500"); page.wait_for_timeout(300)
+    check("inspection over 17 s is a DNF", state() == "stopped" and last_penalty("full") == "dnf")
+    page.keyboard.press("Space")
+    page.click(".shown .timer-options label:has-text('Inspection') input"); page.wait_for_timeout(200)
+    check("settings saved", rows_table("settings", "key='inspection.full' AND value='false'") == 1)
+
     # --- sessions: penalties, flags, delete any solve, new session
     answers = []
     on_dialog = lambda d: d.accept(answers.pop(0) if answers else "")
     page.on("dialog", on_dialog)
     for _ in range(2):
-        page.keyboard.press("Space"); page.wait_for_timeout(120)
+        start(); page.wait_for_timeout(120)
         page.keyboard.press("Space"); page.wait_for_timeout(250)
         page.keyboard.press("Space"); page.wait_for_timeout(50)
     page.click(".shown .last-solve button[data-act=dnf]"); page.wait_for_timeout(250)
@@ -124,7 +157,7 @@ with sync_playwright() as p:
     check("oll picture", page.locator(f"{oll} .case-head svg rect").count() >= 9)
     page.wait_for_timeout(200)   # let the next deal prefetch
     k0 = rows("oll")
-    page.keyboard.press("Space"); page.wait_for_timeout(200); page.keyboard.press("Space")
+    start(); page.wait_for_timeout(200); page.keyboard.press("Space")
     page.wait_for_timeout(200)
     check("oll attempt saved", rows("oll") == k0 + 1)
     check("oll history", page.locator(f"{oll} .history li").count() >= 1)

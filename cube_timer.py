@@ -241,6 +241,37 @@ def _merge_u(moves):
 DNF = math.inf                      # a DNF counts as infinitely slow in averages
 PENALTIES = (None, "+2", "dnf")      # times.penalty: none, plus two seconds, did not finish
 
+# Timer settings, shared by the web app and the GUI (table settings, JSON values).
+# Full Solve inspection is WCA's 15 s with its penalties; OLL / PLL inspection
+# is a plain countdown of inspection_seconds.<mode>, with no penalties.
+WCA_INSPECTION = 15
+DEFAULT_SETTINGS = {
+    "inspection.full": False,
+    "inspection.oll": False,
+    "inspection.pll": False,
+    "inspection_seconds.oll": 8,
+    "inspection_seconds.pll": 8,
+    "inspection_voice": False,       # say "eight seconds" / "twelve seconds" (WCA)
+    "hold_to_start": True,
+    "hold_ms": 300,
+}
+SETTING_CHOICES = {
+    "inspection_seconds.oll": (5, 8, 12, 15),
+    "inspection_seconds.pll": (5, 8, 12, 15),
+    "hold_ms": (300, 550, 1000),
+}
+
+
+def check_setting(key, value):
+    """None if value is allowed for key, else what is wrong."""
+    if key not in DEFAULT_SETTINGS:
+        return f"unknown setting {key!r}"
+    if type(value) is not type(DEFAULT_SETTINGS[key]):
+        return f"{key} must be a {type(DEFAULT_SETTINGS[key]).__name__}"
+    if key in SETTING_CHOICES and value not in SETTING_CHOICES[key]:
+        return f"{key} must be one of {SETTING_CHOICES[key]}"
+    return None
+
 
 def effective(seconds, penalty):
     """A solve's time once its penalty is applied (DNF for a DNF)."""
@@ -386,6 +417,12 @@ class Database:
                 name    TEXT    NOT NULL,
                 created TEXT    DEFAULT (datetime('now','localtime')),
                 PRIMARY KEY (mode, number)
+            )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             )
         """)
         self._add_solve_columns()
@@ -672,16 +709,42 @@ class Database:
         )
         return [(c, effective(s, p), ts) for c, s, p, ts in cur]
 
-    def add(self, mode, seconds, case_name=None, scramble=None):
-        """Record an attempt in the selected session; returns its id."""
+    def add(self, mode, seconds, case_name=None, scramble=None, penalty=None):
+        """Record an attempt in the selected session; returns its id.
+        penalty is None, "+2" or "dnf" (e.g. from overrunning WCA inspection)."""
+        if penalty not in PENALTIES:
+            raise ValueError(f"unknown penalty {penalty!r}")
         session = self.current_session(mode)
         self._ensure_session(mode, session)
         cur = self.conn.execute(
-            "INSERT INTO times (mode,case_name,seconds,scramble,session) VALUES (?,?,?,?,?)",
-            (mode, case_name, seconds, scramble, session),
+            "INSERT INTO times (mode,case_name,seconds,scramble,session,penalty) "
+            "VALUES (?,?,?,?,?,?)",
+            (mode, case_name, seconds, scramble, session, penalty),
         )
         self.conn.commit()
         return cur.lastrowid
+
+    # --- settings ----------------------------------------------------------------
+    def get_settings(self):
+        """Every setting: the saved values over DEFAULT_SETTINGS."""
+        out = dict(DEFAULT_SETTINGS)
+        for key, value in self.conn.execute("SELECT key,value FROM settings"):
+            if key in out:
+                try:
+                    out[key] = json.loads(value)
+                except ValueError:
+                    pass
+        return out
+
+    def set_setting(self, key, value):
+        """Save one setting; check_setting() says whether the value is allowed."""
+        problem = check_setting(key, value)
+        if problem:
+            raise ValueError(problem)
+        self.conn.execute("INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)",
+                          (key, json.dumps(value)))
+        self.conn.commit()
+        log.info("setting %s = %r", key, value)
 
     def get(self, mode, case_name=None, limit=100):
         """Latest (time, ts) pairs, newest first; time has the penalty applied (DNF = inf)."""

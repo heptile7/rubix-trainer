@@ -144,6 +144,38 @@ st = app.screen("stats"); app.show_screen("stats"); pump()
 st._set(scope="all"); pump()
 check("stats all-time rows", len(st._rows) >= 1)
 
+# --- hold to start and inspection, on a fake clock ---
+full = app.screen("full"); app.show_screen("full"); pump()
+t = [1000.0]; full.clock = lambda: t[0]
+class _Key: widget = app.root
+down = lambda: app._space_press(_Key()); up = lambda: app._space_release(_Key())
+newest = lambda m: db.solves(m, "session", limit=1)[0]
+down(); pump(3); t[0] += 0.1; up(); pump(3)
+check("hold: short hold doesn't start", full._state == "idle")
+down(); down(); t[0] += 0.4; pump(10)
+check("hold: auto-repeat ignored, ready", full._state == "holding"
+      and full.timer_label.cget("text_color") == g.C_RUNNING)
+up(); pump(3); t[0] += 6.5; down(); up(); pump(3)
+check("hold: timed solve saved", abs(newest("full")[2] - 6.5) < 1e-6 and newest("full")[3] is None)
+down(); up(); pump(3)
+full.options._save("inspection.full", True)
+down(); up(); pump(3)
+check("inspection counts down", full._state == "inspecting" and full.timer_label.cget("text") == "15")
+t[0] += 15.5; pump(3); down(); t[0] += 0.4; up(); t[0] += 3; down(); up(); pump(3)
+check("inspection over 15 s is +2", newest("full")[3] == "+2")
+down(); up(); pump(3); down(); up(); t[0] += 17.5; pump(5)
+check("inspection over 17 s is a DNF", full._state == "stopped" and newest("full")[3] == "dnf")
+down(); up(); pump(3)
+full.options._save("inspection.full", False)
+oll = app.screen("oll"); app.show_screen("oll"); pump()
+oll.clock = lambda: t[0]
+oll.options._save("inspection.oll", True)
+down(); up(); pump(3); t[0] += 30; pump(3)
+check("practice inspection: no penalty", oll._state == "inspecting" and oll.timer_label.cget("text") == "0")
+oll.timer_toggle(); t[0] += 1.2; oll.timer_toggle(); pump(3)
+check("practice attempt saved without penalty", newest("oll")[3] is None)
+oll.options._save("inspection.oll", False)
+
 # resize: layouts reflow without error
 app.root.geometry("1600x1000"); app.show_screen("cases"); pump(40)
 app.root.geometry("1000x660"); app.show_screen("oll"); pump(40)

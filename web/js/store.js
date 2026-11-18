@@ -22,8 +22,11 @@ export class Store {
     this.recent = boot.recent;
     // mode -> {session_no, session: stats, all: stats} (solve_stats; "DNF" for a DNF)
     this.stats = boot.stats;
+    // timer settings shared with the GUI (DEFAULT_SETTINGS in cube_timer.py)
+    this.settings = boot.settings;
     this._listeners = [];
     this._timeListeners = [];
+    this._settingListeners = [];
     for (const mode of ["oll", "pll"]) {
       this.cases[mode] = boot.cases[mode];
       this.byName[mode] = Object.fromEntries(boot.cases[mode].map((c) => [c.name, c]));
@@ -189,6 +192,29 @@ export class Store {
   }
 
   // --- times ----------------------------------------------------------
+  // --- settings ----------------------------------------------------------
+  /** fn() runs after any setting changed. */
+  onSettings(fn) { this._settingListeners.push(fn); }
+
+  /** Change one setting at once in memory, then save it. */
+  setSetting(key, value) {
+    this.settings[key] = value;
+    for (const fn of this._settingListeners) fn(key);
+    api.saveSettings({ [key]: value });
+  }
+
+  /** What a Timer needs for this mode (see Timer.options). */
+  timerOptions(mode) {
+    const s = this.settings;
+    const on = s[`inspection.${mode}`];
+    return {
+      inspection: on ? (mode === "full" ? 15 : s[`inspection_seconds.${mode}`]) : 0,
+      wca: mode === "full",
+      holdMs: s.hold_to_start ? s.hold_ms : 0,
+      voice: s.inspection_voice,
+    };
+  }
+
   /** fn(mode) runs whenever a mode's attempts or stats change. */
   onTimes(fn) { this._timeListeners.push(fn); }
 

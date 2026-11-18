@@ -49,6 +49,7 @@ export const api = {
   setPenalty:   (id, penalty) => write("PUT", `/api/solves/${id}/penalty`, { penalty }),
   setFlag:      (id, flagged, note) => write("PUT", `/api/solves/${id}/flag`, { flagged, note }),
   deleteSolve:  (id) => write("DELETE", `/api/solves/${id}`),
+  saveSettings: (values) => write("PUT", "/api/settings", { values }),
   newSession:   (mode, name) => write("POST", `/api/session/${mode}`, { name }),
   selectSession: (mode, n) => write("PUT", `/api/session/${mode}/${n}`),
   renameSession: (mode, n, name) => write("PATCH", `/api/session/${mode}/${n}`, { name }),

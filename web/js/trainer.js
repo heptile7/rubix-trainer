@@ -11,6 +11,7 @@ import { Timer } from "./timer.js";
 import { h, fmt, STATUSES, SLOWEST_COUNT, titleCase, groupOrder, pick, pickWeighted, resultBar, toast } from "./util.js";
 import { selectionTools, casePicker } from "./widgets.js";
 import { sessionPanel, lastSolveBar } from "./solves.js";
+import { timerOptions } from "./options.js";
 
 const PICK_HINT = "Click: select  •  double-click: pin";
 const READY = "Scramble from solved (yellow top, green front), then press SPACE";
@@ -78,7 +79,8 @@ export function trainerScreen(store, mode, title) {
       h("button.btn.big", { type: "button", text: "Next Case", onclick: () => pickNextCase() }),
       h("button.btn.big.danger", { type: "button", text: "Delete Last", onclick: deleteLast })),
     last.el,
-    result);
+    result,
+    timerOptions(store, mode).el);
 
   // ---- side column: Cases | History ---------------------------------------
   const hoverLabel = h("div.hint", { text: PICK_HINT });
@@ -283,6 +285,7 @@ export function trainerScreen(store, mode, title) {
 
   const timer = new Timer(timerLabel, startBtn, {
     onNext: () => pickNextCase(),
+    options: () => store.timerOptions(mode),
     onStop(seconds) {
       if (!current) return;
       const name = current.name;
