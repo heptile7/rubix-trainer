@@ -12,6 +12,7 @@ A Rubik's Cube practice timer in Python: full solves plus OLL (57 cases) and PLL
 pip install -r requirements.txt   # rich, customtkinter, fastapi, uvicorn
 python cube_web.py                # web app (opens the browser; --no-browser, --port N, --window)
 python cube_timer_gui.py          # GUI
+python make_shortcut.py           # desktop shortcut to the GUI (--start-menu, --remove)
 python cube_timer.py              # terminal app (interactive, blocks on input)
 python cube_diagram.py            # validate every OLL/PLL algorithm
 python make_scrambles.py [n]      # regenerate case_scrambles.json (n per case, default 10; ~90 s)
@@ -34,6 +35,8 @@ A failed check or stale docs returns `{"decision": "block"}`, so the turn contin
 - `make_scrambles.py` — standalone pure-Python Kociemba two-phase solver (cubie model, move/pruning tables cached as a pickle in the system temp folder) that writes `case_scrambles.json`. Not imported by the app.
 - `case_scrambles.json` — `{"scrambles": {case name: [scramble, ...]}}`, generated; safe to regenerate.
 - `cube_timer_gui.py` — customtkinter app. Imports the data layer from `cube_timer.py`. `CubeTimerApp` owns a sidebar and one frame per screen, shown and hidden with `grid()` / `grid_remove()`.
+- `make_shortcut.py` — makes the Windows shortcut `Cube Timer.lnk`. The target is the running Python's `pythonw.exe` with `cube_timer_gui.py` as its argument, so there's no console and no bundle to rebuild. It goes on the Desktop (via `[Environment]::GetFolderPath`, which follows OneDrive) and, with `--start-menu`, in Programs. The shortcut is made through PowerShell's `WScript.Shell` COM object, with no pywin32. The script checks that this Python can import `customtkinter` and `rich` first. `write_icon()` draws `cube_timer.ico` in pure Python: PNG images at 16 to 256 px inside an ICO, no Pillow.
+- **Running under pythonw.** The shortcut runs the GUI with no console, so the GUI's third-party imports are wrapped. A missing package (including `rich`, whose absence makes `cube_timer` exit) shows a `_cannot_start` dialog with the pip command. `main()` sets the Windows AppUserModelID `CubeTimer.Desktop` so the app gets its own taskbar button, and `CubeTimerApp` sets `cube_timer.ico` as the window icon (`ICON_FILE`), which also stops customtkinter from replacing it with its own.
 - `cube_io.py` — export (`export_csv`, `export_backup`, `export_cstimer`) and import (`import_any` → `import_backup` / `import_cstimer`, after `backup_before_import` copies the file to `cube_times.before-import-*.db`). Imports merge: sessions matched by (mode, name) or made with `Database.create_session` (not selected), attempts deduplicated on (mode, seconds to the ms, ts) and inserted with `Database.add_imported`, then one commit. csTimer sessions named `OLL – …` / `PLL – …` go back to that mode, with the case taken from the comment. Bad files raise `ImportProblem` with a message for the user. Used by both front ends.
 - `cube_web.py` — FastAPI server for the web app. `create_app(db_path)` builds it (tests pass a temporary database path); `main()` runs uvicorn on 127.0.0.1 from port 8765 up.
 - `web/` — the web page: `index.html`, `style.css`, `js/*.js` ES modules. No framework, no build step, no npm (Node here is 16).

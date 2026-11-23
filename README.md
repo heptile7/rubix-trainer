@@ -61,6 +61,24 @@ python cube_timer_gui.py
 
 This opens a window with the same pages and features as the web app, drawn with customtkinter. There's no server: the window reads and writes the database directly. Only the Full Solve page is built at startup, which takes about 0.6 s. The other pages are built the first time you open them, which takes up to 2.6 s for the Case Gallery.
 
+**Start it from your desktop.** Run this once:
+
+```
+python make_shortcut.py               # puts a "Cube Timer" icon on your desktop
+python make_shortcut.py --start-menu  # also adds it to the Start menu, so you can search for it
+python make_shortcut.py --remove      # removes the shortcut(s)
+```
+
+Double-click the icon to open the desktop app. About 2 seconds later the window is up.
+
+- **No console.** It runs `cube_timer_gui.py` with `pythonw.exe`, so no console window opens.
+- **Always up to date.** It runs the latest code every time, so there's nothing to rebuild after the code changes.
+- **Your usual data.** It uses your usual `cube_times.db`.
+- **Small.** The shortcut is about 2 KB. A bundled `.exe` would take 30–40 MB and start slower.
+- **Its own icon.** The window and taskbar button show a cube icon (`cube_timer.ico`, drawn by the script), not Python's.
+
+Run the script with the Python that has the packages from `requirements.txt`; the shortcut uses that Python. The script checks first, and stops with the install command if a package is missing. If the app still can't start later, for example after a package was uninstalled, it shows a dialog saying what's missing. Since there's no console, it can't print the error anywhere else. If Python moves (for example after you install a new version), run `python make_shortcut.py` again.
+
 ### Terminal app: `cube_timer.py`
 
 ```
@@ -209,6 +227,8 @@ Averages (ao5, ao12, …) drop the best and worst 5% of the most recent *n* time
 | --- | --- |
 | `cube_timer.py` | OLL and PLL case lists, scramble generator, database, averages, and the terminal app. |
 | `cube_timer_gui.py` | The desktop app. |
+| `make_shortcut.py` | Makes the desktop (and Start menu) shortcut for the desktop app, and draws `cube_timer.ico`. |
+| `cube_timer.ico` | The app's icon: the shortcut, window and taskbar button use it. |
 | `cube_web.py` | The web app's server: serves `web/` and a JSON API over the database. |
 | `cube_io.py` | Export to CSV, a JSON backup and csTimer's format, and import of backups and csTimer files. |
 | `web/` | The web app's page: `index.html`, `style.css` and plain JavaScript modules in `web/js/` (no build step). |

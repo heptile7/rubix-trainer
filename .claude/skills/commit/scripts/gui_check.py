@@ -215,6 +215,34 @@ app.root.geometry("1600x1000"); app.show_screen("cases"); pump(40)
 app.root.geometry("1000x660"); app.show_screen("oll"); pump(40)
 
 app._on_close()
+# --- desktop shortcut, icon and start-up dialog (make_shortcut.py / pythonw) ---
+import struct, subprocess
+from pathlib import Path
+import make_shortcut as ms
+ico = g.ICON_FILE.read_bytes() if g.ICON_FILE.exists() else b""
+check("icon file is an ICO with 6 sizes", ico[:4] == b"\0\0\1\0" and struct.unpack("<H", ico[4:6])[0] == 6)
+tmp_dir = Path(tempfile.mkdtemp())
+ms.write_icon(tmp_dir / "t.ico")
+check("write_icon draws the same icon", (tmp_dir / "t.ico").read_bytes() == ico)
+pythonw = Path(sys.executable).with_name("pythonw.exe")
+link = ms.make_shortcut(tmp_dir, pythonw)
+target = subprocess.run(["powershell", "-NoProfile", "-Command",
+                         f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{link}'); "
+                         "$s.TargetPath + '|' + $s.Arguments + '|' + $s.IconLocation"],
+                        capture_output=True, text=True).stdout.strip()
+check("shortcut runs the GUI with pythonw and the icon",
+      target.lower().startswith(str(pythonw).lower()) and "cube_timer_gui.py" in target
+      and "cube_timer.ico" in target, target)
+probe = ("import sys, runpy, tkinter.messagebox as mb; shown = []; "
+         "mb.showerror = lambda t, m: shown.append(t); sys.modules['customtkinter'] = None\n"
+         "try: runpy.run_path(sys.argv[1], run_name='__main__')\n"
+         "except SystemExit as e: print(shown, '|', e)")
+out = subprocess.run([sys.executable, "-c", probe, os.path.join(ROOT, "cube_timer_gui.py")],
+                     capture_output=True, text=True, cwd=tempfile.gettempdir()).stdout
+check("missing package -> dialog with pip command",
+      "Cube Timer can't start" in out and "customtkinter" in out
+      and os.path.join(ROOT, "requirements.txt") in out, out.strip()[:160])
+
 after = hashlib.md5(open(REAL_DB, "rb").read()).hexdigest()
 check("real DB untouched", before == after)
 

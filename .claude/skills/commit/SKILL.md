@@ -37,7 +37,7 @@ If one turn did several unrelated changes, make one commit per change: stage eac
    | compile | every changed `.py` | every script byte-compiles |
    | algorithms | `cube_timer.py`, `cube_diagram.py` | `cube_diagram.py` prints "All OLL and PLL algorithms check out." |
    | cli | `cube_timer.py` | the terminal app, driven by scripted input |
-   | gui | GUI, data layer, scrambles | the customtkinter app, driven headlessly (93 checks, about 60 s) |
+   | gui | GUI, data layer, scrambles | the customtkinter app, driven headlessly (97 checks, about 60 s) |
    | api | `cube_web.py`, `web/`, data layer | the API through TestClient, including that every case's scramble really sets it up |
    | web | `cube_web.py`, `web/`, data layer | the page in headless Chrome through Playwright (68 checks). Screenshots go to a temp folder; look at them when the layout changed |
 

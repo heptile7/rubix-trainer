@@ -18,9 +18,34 @@ import traceback
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
-import customtkinter as ctk
 
-import cube_io
+def _cannot_start(problem):
+    """
+    Explain a failed start in a dialog: the desktop shortcut runs this with
+    pythonw.exe, which has no console, so an error would otherwise vanish.
+    """
+    python = Path(sys.executable)
+    if python.name.lower() == "pythonw.exe":
+        python = python.with_name("python.exe")
+    message = (f"{problem}\n\nInstall the app's packages into this Python:\n\n"
+               f"\"{python}\" -m pip install -r \"{Path(__file__).resolve().with_name('requirements.txt')}\"")
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror("Cube Timer can't start", message)
+        root.destroy()
+    except Exception:
+        pass
+    sys.exit(message)
+
+
+try:
+    import customtkinter as ctk
+    import cube_io                       # imports cube_timer, which exits if rich is missing
+except ImportError as exc:
+    _cannot_start(f"A package is missing: {exc.name or exc}.")
+except SystemExit:
+    _cannot_start("A package is missing: rich.")
 
 from cube_timer import (
     DNF,
@@ -43,6 +68,7 @@ from cube_diagram import CaseDiagram, case_weight
 # Constants
 # ---------------------------------------------------------------------------
 CASES = {"oll": OLL_CASES, "pll": PLL_CASES}
+ICON_FILE = Path(__file__).with_name("cube_timer.ico")   # see make_shortcut.py
 
 C_SELECTED = "#00cc44"       # border of a case picked for practice
 C_IDLE   = "gray55"
@@ -2552,6 +2578,11 @@ class CubeTimerApp:
 
         self.root = ctk.CTk()
         self.root.title("Cube Timer")
+        if ICON_FILE.exists():           # made by make_shortcut.py; also stops CTk's own icon
+            try:
+                self.root.iconbitmap(default=str(ICON_FILE))
+            except tk.TclError:
+                pass
         self.root.geometry("1120x720")
         self.root.minsize(980, 640)
 
@@ -2707,6 +2738,13 @@ class CubeTimerApp:
 # ---------------------------------------------------------------------------
 def main():
     setup_logging()
+    if sys.platform == "win32":
+        # its own taskbar button with the cube icon, not grouped under pythonw.exe
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("CubeTimer.Desktop")
+        except Exception:
+            pass
     app = CubeTimerApp()
     app.run()
 
