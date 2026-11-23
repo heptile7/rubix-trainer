@@ -68,11 +68,14 @@ with sync_playwright() as p:
     start(); page.wait_for_timeout(350)
     check("full running", page.locator(".shown .timer.running").count() == 1)
     page.keyboard.press("Space")
-    shown = page.inner_text(".shown .timer")
     check("stop deals the next scramble at once", state() == "idle"
-          and page.inner_text(".shown .scramble-box") != timed_on, shown)
-    check("the time stays on the clock", shown != "0.00" and page.locator(".shown .timer.stopped").count() == 1)
+          and page.inner_text(".shown .scramble-box") != timed_on)
+    check("the clock is back to 0.00", page.inner_text(".shown .timer") == "0.00"
+          and page.get_attribute(".shown .timer", "class").strip() == "timer", page.inner_text(".shown .timer"))
     page.wait_for_timeout(200)
+    shown = page.evaluate("window.cubeApp.store.recent.full[0]") or {}
+    shown = f"{shown.get('seconds', 0):.2f}"
+    check("saved time in the status line", shown in page.inner_text(".shown .status-line"), shown)
     check("full saved", rows("full") == n0 + 1)
     check("full result bar", "Last:" in page.inner_text(".shown .result-bar"))
     card = ".shown .timer-row .prev-solve"
@@ -109,7 +112,8 @@ with sync_playwright() as p:
     page.keyboard.press("Space"); page.wait_for_timeout(100)
     page.evaluate("window.cubeApp.screens.full.timer._inspStart -= 17500"); page.wait_for_timeout(300)
     check("inspection over 17 s is a DNF", state() == "idle" and last_penalty("full") == "dnf"
-          and page.inner_text(".shown .timer") == "DNF")
+          and page.inner_text(".shown .timer") == "0.00"
+          and page.inner_text(".shown .prev-solve .prev-time").startswith("DNF"))
     page.click(".shown .timer-options label:has-text('Inspection') input"); page.wait_for_timeout(200)
     check("settings saved", rows_table("settings", "key='inspection.full' AND value='false'") == 1)
 

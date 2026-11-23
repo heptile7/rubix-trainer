@@ -43,10 +43,13 @@ check("previous-solve card hidden in an empty session", not full.prev.winfo_mana
       or db.stats("full", "session")["count"] > 0)
 timed_on = full._scramble
 full.timer_toggle(); pump()
-shown = full.timer_label.cget("text")
-check("stop deals the next scramble at once", full._state == "idle" and full._scramble != timed_on, shown)
-check("the time stays on the clock", shown != "0.00" and full.timer_label.cget("text_color") == g.C_STOPPED)
+check("stop deals the next scramble at once", full._state == "idle" and full._scramble != timed_on)
+check("the clock is back to 0.00", full.timer_label.cget("text") == "0.00"
+      and full.timer_label.cget("text_color") == g.C_IDLE, full.timer_label.cget("text"))
 check("full time saved", len(db.get("full", limit=10000)) == n0 + 1)
+saved = db.solves("full", "session", limit=1)[0]
+shown = ct.fmt_solve(saved[2], saved[3])
+check("saved time in the status line", shown in full.status_label.cget("text"), full.status_label.cget("text"))
 check("previous-solve card shows it", bool(full.prev.winfo_manager())
       and full.prev.time_label.cget("text").startswith(shown)
       and full.prev.scramble_label.cget("text") == timed_on)
@@ -174,7 +177,7 @@ check("hold: auto-repeat ignored, ready", full._state == "holding"
 up(); pump(3); t[0] += 6.5; down(); up(); pump(3)
 check("hold: timed solve saved", abs(newest("full")[2] - 6.5) < 1e-6 and newest("full")[3] is None)
 check("hold: stop's release doesn't start another", full._state == "idle"
-      and full.timer_label.cget("text") == "6.50")
+      and full.timer_label.cget("text") == "0.00" and full.prev.time_label.cget("text") == "6.50")
 full.options._save("inspection.full", True)
 down(); up(); pump(3)
 check("inspection counts down", full._state == "inspecting" and full.timer_label.cget("text") == "15")
@@ -182,7 +185,7 @@ t[0] += 15.5; pump(3); down(); t[0] += 0.4; up(); t[0] += 3; down(); up(); pump(
 check("inspection over 15 s is +2", newest("full")[3] == "+2")
 down(); up(); t[0] += 17.5; pump(5)
 check("inspection over 17 s is a DNF", full._state == "idle" and newest("full")[3] == "dnf"
-      and full.timer_label.cget("text") == "DNF")
+      and full.timer_label.cget("text") == "0.00" and full.prev.time_label.cget("text") == "DNF")
 full.options._save("inspection.full", False)
 oll = app.screen("oll"); app.show_screen("oll"); pump()
 oll.clock = lambda: t[0]

@@ -19,7 +19,7 @@ CHECKS = {
     "compile": "byte-compile every script",
     "algorithms": "python cube_diagram.py (every OLL/PLL algorithm)",
     "cli": "terminal app driven by scripted input",
-    "gui": "customtkinter app driven headlessly (106 checks)",
+    "gui": "customtkinter app driven headlessly (107 checks)",
     "api": "web API via TestClient, incl. every case's scramble",
     "web": "web page in headless Chrome via Playwright",
 }

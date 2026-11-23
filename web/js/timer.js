@@ -10,8 +10,8 @@
 //   holding     the timer turns red; after holdMs it turns green (ready).
 //               Release when ready starts the clock; earlier goes back.
 //   running     press stops (at keydown, so the time is exact): the attempt is
-//               saved (onStop) and the next scramble dealt at once (onNext); the
-//               time stays on the clock, in yellow, until the next attempt starts.
+//               saved (onStop), the next scramble dealt and the clock reset to
+//               0.00 at once (onNext); the time is in the previous-solve card.
 //               That key's release is swallowed.
 // WCA inspection (Full Solve): starting after 15 s is +2, after 17 s a DNF,
 // which ends the attempt at once. Practice inspection has no penalties.
@@ -124,14 +124,12 @@ export class Timer {
     const seconds = Math.max(0, (at - this._start) / 1000);
     this.state = "idle";
     this.onStop(seconds, this._penalty);
-    this._advance(this._penalty === "+2" ? `${fmt(seconds + 2)}+` : fmt(seconds));
+    this._advance();
   }
 
-  /** After a save: deal the next scramble now, keep the result on the clock. */
-  _advance(text) {
-    this.onNext();                    // resets the clock to 0.00 and deals the next one
-    this._set("idle", "stopped", "Start  [space]");
-    this._show(text);
+  /** After a save: deal the next scramble now; the clock goes back to 0.00. */
+  _advance() {
+    this.onNext();                    // timer.reset(): 0.00, idle; then the next scramble
   }
 
   /** Inspection ran past 17 s: the attempt is a DNF. */
@@ -139,7 +137,7 @@ export class Timer {
     cancelAnimationFrame(this._frame);
     this.state = "idle";
     this.onStop(0, "dnf");
-    this._advance("DNF");
+    this._advance();
   }
 
   // ---- display ------------------------------------------------------------------

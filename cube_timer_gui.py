@@ -125,9 +125,9 @@ class TimerScreenBase(ctk.CTkFrame):
     the press. WCA inspection (Full Solve) gives +2 after 15 s and ends the
     attempt as a DNF after 17 s; practice inspection has no penalties.
 
-    Stopping saves the attempt and deals the next scramble at once (_advance);
-    the time stays on the clock, in yellow, until the next attempt starts. The
-    previous solve can be reviewed and corrected in the PreviousSolve card.
+    Stopping saves the attempt, deals the next scramble and puts the clock
+    back to 0.00 at once (_advance). The solve just done is shown, and can be
+    corrected, in the PreviousSolve card beside the clock.
 
     Subclasses create self.timer_label and self.start_btn, set self.mode, and
     implement _next() and _save_result(elapsed, penalty).
@@ -275,7 +275,7 @@ class TimerScreenBase(ctk.CTkFrame):
         elapsed      = max(0.0, now - self._start_time)
         self._state  = "idle"
         self._save_result(elapsed, self._penalty)
-        self._advance(fmt_solve(elapsed, self._penalty), C_STOPPED)
+        self._advance()
 
     def _dnf(self):
         """WCA inspection ran past 17 s: the attempt is a DNF."""
@@ -284,17 +284,16 @@ class TimerScreenBase(ctk.CTkFrame):
             self._timer_id = None
         self._state = "idle"
         self._save_result(0.0, "dnf")
-        self._advance("DNF", C_DNF)
+        self._advance()
 
-    def _advance(self, shown, color):
+    def _advance(self):
         """
-        After an attempt is saved: deal the next scramble straight away, but
-        keep the result on the clock (and the "Saved …" line) until the next
-        attempt starts.
+        After an attempt is saved: deal the next scramble straight away and put
+        the clock back to 0.00, ready for it. The time just done is in the
+        PreviousSolve card and the "Saved …" line, which is kept.
         """
         note = self.status_label.cget("text")
         self._next()                  # resets the clock to 0.00 and loads the next one
-        self.timer_label.configure(text=shown, text_color=color)
         self.status_label.configure(text=note)
         self._balance_timer_row()
 

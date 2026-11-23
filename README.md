@@ -114,7 +114,7 @@ Two small differences in the web app:
 | Case Gallery | A large picture of every OLL and PLL case, grouped by shape, with its name, algorithm and learning status. Click cases to build a practice set. |
 | Statistics | For Full Solve, OLL or PLL: session and all-time stats, and every solve with its ao5 / ao12, for this session or all time, optionally flagged solves only. Each row has +2 / DNF / flag / delete. A **Chart** view plots your progress. Also count / best / average for every OLL and PLL case. |
 
-**Space** starts the timer and stops it. Stopping saves the time and deals the next scramble or case straight away, so you can go on solving with no extra key press. The time you just did stays on the clock, in yellow, until you start the next one. **Delete Last** removes the most recent solve.
+**Space** starts the timer and stops it. Stopping saves the time and deals the next scramble or case straight away, so you can go on solving with no extra key press. The clock goes back to **0.00** at once, ready for the new scramble; the time you just did is in the *Previous solve* card and in the "Saved 19.93 — next scramble is ready" line under the clock. **Delete Last** removes the most recent solve.
 
 **Previous solve.** The card to the left of the clock shows the solve you just did: its time, the case (OLL / PLL), and the scramble it was timed on, so you can check that you scrambled it right. Under them, **OK / +2 / DNF / ⚑ Flag** correct it or mark it for later. The card stays until your next solve replaces it, and it's hidden while the session has no solves. In a narrow window the clock moves right to make room for it; on a phone-sized screen it goes under the clock.
 
