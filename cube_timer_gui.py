@@ -583,9 +583,14 @@ class PreviousSolve(ctk.CTkFrame):
         self.grid()
 
 
-STAT_ROWS = [("count", "Solves"), ("best", "Best"), ("worst", "Worst"), ("mean", "Mean"),
-             ("ao5", "ao5"), ("ao12", "ao12"), ("ao50", "ao50"), ("ao100", "ao100"),
-             ("best_ao5", "Best ao5"), ("best_ao12", "Best ao12")]
+# Statistics: a summary (session | all time) and the averages (now | session best | all-time best)
+SUMMARY_ROWS = [("count", "Solves"), ("best", "Best"), ("worst", "Worst"), ("mean", "Mean"),
+                ("sd", "Std dev")]
+AVERAGE_NS = (3, 5, 12, 50, 100)
+# the side panel's single table (session | all time)
+COMPACT_ROWS = [("count", "Solves"), ("best", "Best"), ("mean", "Mean"), ("sd", "Std dev"),
+                ("ao5", "ao5"), ("ao12", "ao12"), ("ao100", "ao100"),
+                ("best_ao5", "Best ao5"), ("best_ao12", "Best ao12")]
 
 
 def stat_text(stats, key):
@@ -595,32 +600,62 @@ def stat_text(stats, key):
 
 
 class StatsBlock(tk.Frame):
-    """Session vs all-time summary as a small table of plain tk labels."""
+    """
+    Session vs all-time stats as plain tk labels. compact (the side panels):
+    one table, session | all time. Otherwise (Statistics): a summary table,
+    session | all time, and beside it the averages ao3 ... ao100, each now,
+    best in the session and best of all time (green when the session holds
+    the all-time best and there are older solves).
+    """
 
     def __init__(self, parent, bg, compact=False):
         super().__init__(parent, bg=bg)
         family = ctk.ThemeManager.theme["CTkFont"]["family"]
         size   = -_px(parent, 12)
-        self.rows = [r for r in STAT_ROWS if not compact or r[0] not in ("worst", "ao50")]
-        head = dict(bg=bg, fg="#b3b3b3", font=(family, size, "bold"), anchor="w")
-        self.session_head = tk.Label(self, text="Session", **head)
-        self.session_head.grid(row=0, column=1, sticky="w", padx=(0, _px(parent, 18)))
-        tk.Label(self, text="All time", **head).grid(row=0, column=2, sticky="w")
-        self.cells = []
-        for i, (_, label) in enumerate(self.rows, start=1):
-            tk.Label(self, text=label, bg=bg, fg="gray55", font=(family, size), anchor="w").grid(
-                row=i, column=0, sticky="w", padx=(0, _px(parent, 18)))
-            pair = [tk.Label(self, text="", bg=bg, fg=C_TEXT, font=("Consolas", size), anchor="w")
-                    for _ in range(2)]
-            pair[0].grid(row=i, column=1, sticky="w")
-            pair[1].grid(row=i, column=2, sticky="w")
-            self.cells.append(pair)
+        self.compact = compact
+        self._head = dict(bg=bg, fg="#b3b3b3", font=(family, size, "bold"), anchor="w")
+        self._label = dict(bg=bg, fg="gray55", font=(family, size), anchor="w")
+        self._value = dict(bg=bg, fg=C_TEXT, font=("Consolas", size), anchor="w")
+        self.rows = COMPACT_ROWS if compact else SUMMARY_ROWS
+        left = self if compact else tk.Frame(self, bg=bg)
+        heads, self.cells = self._table(left, ["Session", "All time"], [l for _, l in self.rows], 2)
+        self.session_head = heads[0]
+        self.avg_cells = []
+        if not compact:
+            left.grid(row=0, column=0, sticky="nw", padx=(0, _px(parent, 28)))
+            right = tk.Frame(self, bg=bg)
+            right.grid(row=0, column=1, sticky="nw")
+            _, self.avg_cells = self._table(right, ["Current", "Session best", "All-time best"],
+                                            [f"ao{n}" for n in AVERAGE_NS], 3)
+
+    def _table(self, frame, head, labels, ncols):
+        pad = _px(self, 18)
+        heads = []
+        for c, text in enumerate(head, start=1):
+            lab = tk.Label(frame, text=text, **self._head)
+            lab.grid(row=0, column=c, sticky="w", padx=(0, pad))
+            heads.append(lab)
+        cells = []
+        for i, label in enumerate(labels, start=1):
+            tk.Label(frame, text=label, **self._label).grid(row=i, column=0, sticky="w", padx=(0, pad))
+            row = [tk.Label(frame, text="", **self._value) for _ in range(ncols)]
+            for c, lab in enumerate(row, start=1):
+                lab.grid(row=i, column=c, sticky="w", padx=(0, pad))
+            cells.append(row)
+        return heads, cells
 
     def update_stats(self, session_name, session, all_time):
         self.session_head.configure(text=session_name)
         for (key, _), (a, b) in zip(self.rows, self.cells):
             a.configure(text=stat_text(session, key))
             b.configure(text=stat_text(all_time, key))
+        older = all_time["count"] > session["count"]
+        for n, (now, sbest, abest) in zip(AVERAGE_NS, self.avg_cells):
+            key = f"best_ao{n}"
+            pb = older and all_time[key] is not None and session[key] == all_time[key]
+            now.configure(text=fmt(session[f"ao{n}"]))
+            sbest.configure(text=fmt(session[key]), fg=C_RUNNING if pb else C_TEXT)
+            abest.configure(text=fmt(all_time[key]), fg=C_RUNNING if pb else C_TEXT)
 
 
 class TimerOptions(ctk.CTkFrame):
@@ -2106,15 +2141,19 @@ class ProgressChart(tk.Canvas):
     """
     x = solve number, y = time. Grey dots are single solves (+2: hollow ring,
     DNF: an x along the top), blue / orange lines the ao5 / ao12 (a DNF average
-    breaks the line), a ring marks the PB, and in "All time" a hairline with
-    the session's name marks each session change. Moving the mouse snaps a
+    breaks the line), a ring marks the PB and a dotted step line the PB so far,
+    a diamond (aqua / blue / orange) where the best ao3 / ao5 / ao12 ended, and
+    in "All time" a hairline with the session's name marks each session change.
+    A legend runs along the top. Moving the mouse snaps a
     crosshair to the nearest solve and shows its values. Redrawn on resize,
     debounced like CasePicker._reflow.
     """
 
-    COLORS = {"ao5": "#3987e5", "ao12": "#d95926", "single": "#8c8c8c", "text": C_TEXT,
-              "muted": "#8c8c8c", "grid": "#363636", "axis": "#4a4a4a", "cross": "#6b6b6b"}
-    PAD = (50, 24, 74, 30)        # left, top, right, bottom (before scaling)
+    COLORS = {"ao3": "#199e70", "ao5": "#3987e5", "ao12": "#d95926", "single": "#8c8c8c",
+              "text": C_TEXT, "muted": "#8c8c8c", "grid": "#363636", "axis": "#4a4a4a",
+              "cross": "#6b6b6b", "steps": "#a8adb3"}
+    BEST_KEYS = ("ao3", "ao5", "ao12")
+    PAD = (50, 46, 74, 30)        # left, top (legend + DNF band), right, bottom (before scaling)
 
     def __init__(self, parent, bg):
         super().__init__(parent, bg=bg, highlightthickness=0, height=_px(parent, 340))
@@ -2123,6 +2162,7 @@ class ProgressChart(tk.Canvas):
         self._bold = (family, -_px(parent, 11), "bold")
         self._mono = ("Consolas", -_px(parent, 11))
         self._data, self._names, self._all = [], {}, False
+        self.pb_so_far, self.best_at, self.pb_count = [], {}, 0
         self._job = None
         self._size = (0, 0)
         self.points = 0
@@ -2166,6 +2206,7 @@ class ProgressChart(tk.Canvas):
         self._size = (self.winfo_width(), self.winfo_height())
         self._geo = w, h, left, top, pw, ph = self._geometry()
         c, data = self.COLORS, self._data
+        self.pb_so_far, self.best_at, self.pb_count = [], {}, 0
         if not data:
             self.create_text(w / 2, h / 2, text="No solves to chart yet.", fill=c["muted"],
                              font=self._font)
@@ -2205,8 +2246,9 @@ class ProgressChart(tk.Canvas):
                                          anchor="w", fill=c["muted"], font=self._font)
                         last_label = xs
 
+        self._legend(w)
         r = _px(self, 1.8 if n > 400 else 3)
-        band = top / 2
+        band = top - _px(self, 12)
         for i, row in enumerate(data):
             cx = self._xs(i)
             if row["penalty"] == "dnf":
@@ -2240,19 +2282,93 @@ class ProgressChart(tk.Canvas):
             mid = (ends[0][2] + ends[1][2]) / 2
             hi = 0 if ends[0][2] < ends[1][2] else 1
             ends[hi][2], ends[1 - hi][2] = mid - _px(self, 7), mid + _px(self, 7)
+        placed = []                   # (centre x, y, width) of each label, so they don't overlap
+        cw = _px(self, 6.6)
         for key, last, ly in ends:
-            self.create_text(self._xs(last) + _px(self, 8), ly, text=f"{key} {fmt(data[last][key])}",
-                             anchor="w", fill=c["text"], font=self._mono)
+            text = f"{key} {fmt(data[last][key])}"
+            lx = self._xs(last) + _px(self, 8)
+            self.create_text(lx, ly, text=text, anchor="w", fill=c["text"], font=self._mono)
+            placed.append((lx + len(text) * cw / 2, ly, len(text) * cw))
 
-        best = None
+        def label(cx, cy, text, font, below=False):
+            tw = len(text) * cw + _px(self, 6)
+            tries = (18, -12, 32, -26, 46) if below else (-12, 18, -26, 32, -40, 46)
+            ty = cy + _px(self, tries[0])
+            for dy in tries:
+                yy = cy + _px(self, dy)
+                if yy < top - _px(self, 4) or yy > top + ph + _px(self, 2):
+                    continue
+                if not any(abs(px - cx) < (pw_ + tw) / 2 and abs(py - yy) < _px(self, 13)
+                           for px, py, pw_ in placed):
+                    ty = yy
+                    break
+            lx = min(max(cx, left + tw / 2), w - tw / 2 - 2)
+            placed.append((lx, ty, tw))
+            self.create_text(lx, ty, text=text, fill=c["text"], font=font, tags="label")
+
+        # PB progression: the best single so far, a dotted step line
+        best, pts = None, []
         for i, row in enumerate(data):
             if num(row["time"]) is not None and (best is None or row["time"] < data[best]["time"]):
+                if best is not None:
+                    pts += [self._xs(i), self._ys(data[best]["time"])]
                 best = i
+                pts += [self._xs(i), self._ys(row["time"])]
+            self.pb_so_far.append(None if best is None else data[best]["time"])
         if best is not None:
+            pts += [self._xs(n - 1), self._ys(data[best]["time"])]
+            if len(pts) >= 4:
+                self.create_line(*pts, fill=c["steps"], width=1.5, dash=(2, 3), tags="pbsteps")
+            self.pb_count = len({v for v in self.pb_so_far if v is not None})
             bx, by, pr = self._xs(best), self._ys(data[best]["time"]), _px(self, 6)
             self.create_oval(bx - pr, by - pr, bx + pr, by + pr, outline=c["text"], width=1.5, tags="pb")
-            self.create_text(bx, by + _px(self, 16), text=f"PB {fmt(data[best]['time'])}",
-                             fill=c["text"], font=self._bold)
+            label(bx, by, f"PB {fmt(data[best]['time'])}", self._bold, below=True)
+
+        # best ao3 / ao5 / ao12: a diamond with a surface ring where each ended
+        for key in self.BEST_KEYS:
+            b = None
+            for i, row in enumerate(data):
+                v = num(row.get(key))
+                if v is not None and (b is None or v < data[b][key]):
+                    b = i
+            if b is None:
+                continue
+            self.best_at[key] = b
+            bx, by, d = self._xs(b), self._ys(data[b][key]), _px(self, 5.5)
+            self.create_polygon(bx, by - d, bx + d, by, bx, by + d, bx - d, by, fill=c[key],
+                                outline=self.cget("bg"), width=2, tags=("best", f"best_{key}"))
+            label(bx, by, f"best {key} {fmt(data[b][key])}", self._mono)
+
+    def _legend(self, w):
+        """One row of keys along the top: what each mark means."""
+        c, y, u = self.COLORS, _px(self, 11), (lambda v: _px(self, v))
+        x = self._geo[2]
+        items = [("dot", c["single"], "Single"), ("ring", c["single"], "+2"), ("x", c["muted"], "DNF"),
+                 ("line", c["ao5"], "ao5"), ("line", c["ao12"], "ao12"), ("pb", c["text"], "PB"),
+                 ("steps", c["steps"], "PB progression"), ("diamond", c["ao3"], "Best ao3"),
+                 ("diamond", c["ao5"], "Best ao5"), ("diamond", c["ao12"], "Best ao12")]
+        for kind, color, text in items:
+            if kind == "dot":
+                self.create_oval(x + u(6), y - u(3), x + u(12), y + u(3), fill=color, outline="")
+            elif kind in ("ring", "pb"):
+                r = u(4 if kind == "pb" else 3)
+                self.create_oval(x + u(9) - r, y - r, x + u(9) + r, y + r, outline=color, width=1.5)
+            elif kind == "x":
+                self.create_line(x + u(6), y - u(3), x + u(12), y + u(3), fill=color, width=1.4)
+                self.create_line(x + u(12), y - u(3), x + u(6), y + u(3), fill=color, width=1.4)
+            elif kind == "line":
+                self.create_line(x + u(1), y, x + u(17), y, fill=color, width=2, capstyle="round")
+            elif kind == "steps":
+                self.create_line(x + u(1), y - u(3), x + u(8), y - u(3), x + u(8), y + u(3),
+                                 x + u(17), y + u(3), fill=color, width=1.5, dash=(2, 2))
+            else:
+                self.create_polygon(x + u(9), y - u(5), x + u(14), y, x + u(9), y + u(5), x + u(4), y,
+                                    fill=color, outline="")
+            t = self.create_text(x + u(21), y, text=text, anchor="w", fill="#b3b3b3", font=self._font,
+                                 tags="legend")
+            x = self.bbox(t)[2] + u(14)
+            if x > w - u(60):
+                break
 
     @staticmethod
     def _nice(maximum, ticks=5):
@@ -2273,22 +2389,31 @@ class ProgressChart(tk.Canvas):
         row, c = self._data[i], self.COLORS
         w, h, left, top, pw, ph = self._geo
         cx = self._xs(i)
-        cy = top / 2 if row["penalty"] == "dnf" else self._ys(row["time"])
+        cy = top - _px(self, 12) if row["penalty"] == "dnf" else self._ys(row["time"])
         self.create_line(cx, top, cx, top + ph, fill=c["cross"], tags="hover")
         pr = _px(self, 5)
         self.create_oval(cx - pr, cy - pr, cx + pr, cy + pr, outline=c["text"], width=2, tags="hover")
+        pb = self.pb_so_far[i] if i < len(self.pb_so_far) else None
         lines = [f"#{row['n']}" + (f"  ·  {row['case']}" if row["case"] else ""),
                  f"{fmt_solve(row['seconds'], row['penalty'])}  single",
-                 f"{fmt(row['ao5'])}  ao5", f"{fmt(row['ao12'])}  ao12"]
+                 f"{fmt(row.get('ao3'))}  ao3", f"{fmt(row['ao5'])}  ao5", f"{fmt(row['ao12'])}  ao12",
+                 f"{fmt(pb)}  PB so far"]
+        colors = [c["text"], c["text"], c["ao3"], c["ao5"], c["ao12"], c["text"]]
+        marks = [f"★ best {k}" for k in self.BEST_KEYS if self.best_at.get(k) == i]
+        if pb is not None and row["time"] == pb and (i == 0 or self.pb_so_far[i - 1] != pb):
+            marks.append("★ new PB")
+        lines += marks
+        colors += [C_STOPPED] * len(marks)
         if row["note"]:
             lines.append(f"⚑ {row['note']}")
+            colors.append(C_STOPPED)
         lines.append(row["ts"])
+        colors.append(c["muted"])
         bw, lh = _px(self, 180), _px(self, 16)
         bx = cx + _px(self, 14) if cx + _px(self, 14) + bw < w else cx - _px(self, 14) - bw
         by = top
         self.create_rectangle(bx, by, bx + bw, by + lh * len(lines) + _px(self, 10),
                               fill="#1c1c1c", outline="#444444", tags="hover")
-        colors = [c["text"], c["text"], c["ao5"], c["ao12"]] + [C_STOPPED] * bool(row["note"]) + [c["muted"]]
         for k, (text, color) in enumerate(zip(lines, colors)):
             self.create_text(bx + _px(self, 8), by + _px(self, 6) + k * lh, text=text, anchor="nw",
                              fill=color, font=self._bold if k == 0 else self._font, tags="hover")

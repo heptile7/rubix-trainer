@@ -150,7 +150,8 @@ with sync_playwright() as p:
     page.select_option(".shown .session-select", str(old_n)); page.wait_for_timeout(300)
     st = page.evaluate("window.cubeApp.store.stats.full")
     check("switch back to the earlier session", st["session_no"] == old_n
-          and page.locator(".shown .history.solves li[data-id]").count() == st["session"]["count"] > 0)
+          and page.locator(".shown .history.solves li[data-id]").count()
+          == min(st["session"]["count"], cube_web.HISTORY) > 0)
     page.screenshot(path=os.path.join(SHOTS, "web_full_session.png"))
     page.remove_listener("dialog", on_dialog)
 
@@ -289,10 +290,13 @@ with sync_playwright() as p:
     # --- gallery
     page.goto(URL + "#cases"); page.wait_for_selector(".shown .card")
     check("gallery cards", page.locator(".shown .card").count() == 78)
-    card = page.locator(".shown .card[data-name='OLL 45']")
-    was = page.evaluate("window.cubeApp.store.selected.oll.has('OLL 45')")
+    # an OLL case with no status yet, so the status cycle starts at UNLEARNED
+    pick = page.evaluate("""() => { const s = window.cubeApp.store;
+        return s.cases.oll.map((c) => c.name).find((n) => !s.statuses.oll.has(n)); }""")
+    card = page.locator(f".shown .card[data-name='{pick}']")
+    was = page.evaluate(f"window.cubeApp.store.selected.oll.has('{pick}')")
     card.locator(".name").click(); page.wait_for_timeout(50)
-    check("gallery click selects", page.evaluate("window.cubeApp.store.selected.oll.has('OLL 45')") != was)
+    check("gallery click selects", page.evaluate(f"window.cubeApp.store.selected.oll.has('{pick}')") != was)
     check("card shows selected", ("sel" in card.get_attribute("class")) != was)
     card.locator(".name").click()
     card.locator(".status").click(); page.wait_for_timeout(50)
@@ -302,11 +306,19 @@ with sync_playwright() as p:
     page.screenshot(path=os.path.join(SHOTS, "web_gallery.png"))
     card.locator(".name").dblclick(); page.wait_for_timeout(200)
     st = page.evaluate("(() => { const s = window.cubeApp.screens.oll.state; return [location.hash, s.pinned && s.pinned.name]; })()")
-    check("gallery dblclick opens trainer pinned", st == ["#oll", "OLL 45"], str(st))
-    check("gallery dblclick keeps selection", page.evaluate("window.cubeApp.store.selected.oll.has('OLL 45')") == was)
+    check("gallery dblclick opens trainer pinned", st == ["#oll", pick], str(st))
+    check("gallery dblclick keeps selection", page.evaluate(f"window.cubeApp.store.selected.oll.has('{pick}')") == was)
 
     # --- stats
     page.goto(URL + "#stats"); page.wait_for_selector(".shown table.stat-block")
+    blk = page.evaluate("""() => [...document.querySelectorAll('.shown .stat-blocks tr[data-key]')]
+        .map((tr) => [tr.dataset.key, [...tr.querySelectorAll('td')].map((td) => td.textContent)])""")
+    blk = dict(blk)
+    st_full = page.evaluate("window.cubeApp.store.stats.full")
+    fmt2 = lambda v: "—" if v is None else ("DNF" if v == "DNF" else f"{v:.2f}" if v < 60 else None)
+    check("stats block: std dev and every average", "sd" in blk and all(f"ao{n}" in blk for n in (3, 5, 12, 50, 100))
+          and blk["sd"][0] == fmt2(st_full["session"]["sd"])
+          and blk["ao5"][1] == fmt2(st_full["session"]["best_ao5"]), str(blk)[:300])
     page.click(".shown .stats-filters button[data-key=all]"); page.wait_for_timeout(300)
     check("stats all-time solves", page.locator(".shown table.solves-table tbody tr").count() >= 1)
     page.check(".shown .stats-filters input[type=checkbox]"); page.wait_for_timeout(300)
@@ -320,9 +332,22 @@ with sync_playwright() as p:
         return [m('dots'), m('rings'), m('dnfs') / 2, !!q('line-ao5'), !!q('pb')]; }""")
     check("chart draws every solve", paths[0] + paths[1] + paths[2] == pts > 0
           and paths[3] == (pts >= 5) and paths[4], f"{paths} of {pts}")  # one average draws a point-path
+    marks = page.evaluate("""() => { const c = window.cubeApp.screens.stats.chart;
+        return {pb: c.pbCount, best: c.bestAt, steps: !!document.querySelector('.shown .chart-svg .pb-steps'),
+                diamonds: document.querySelectorAll('.shown .chart-svg path.best').length,
+                legend: document.querySelectorAll('.shown .chart-legend .key-item').length}; }""")
+    with sqlite3.connect(tmp) as _c:
+        _rows = _c.execute("SELECT seconds, penalty FROM times WHERE mode='full' ORDER BY id").fetchall()
+    _fin = [s + (2 if p == "+2" else 0) for s, p in _rows if p != "dnf"]
+    _pbs = len({min(_fin[:k + 1]) for k in range(len(_fin))})
+    check("chart PB progression", marks["pb"] == _pbs and marks["steps"] == (len(_fin) > 0), f"{marks} vs {_pbs}")
+    check("chart best-average diamonds", marks["diamonds"] == len(marks["best"])
+          and set(marks["best"]) == {k for k, n in (("ao3", 3), ("ao5", 5), ("ao12", 12)) if pts >= n}
+          and marks["legend"] == 10, marks)
     box = page.locator(".shown .chart-svg").bounding_box()
     page.mouse.move(box["x"] + box["width"] / 2, box["y"] + 120); page.wait_for_timeout(100)
-    check("chart tooltip", "ao12" in page.inner_text(".shown .chart-tip"))
+    tip = page.inner_text(".shown .chart-tip")
+    check("chart tooltip", "ao12" in tip and "ao3" in tip and "PB so far" in tip, tip)
     page.mouse.move(2, 2)
     page.screenshot(path=os.path.join(SHOTS, "web_chart.png"))
     page.click(".shown .stats-filters button[data-key=solves]"); page.wait_for_timeout(200)

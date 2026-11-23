@@ -47,12 +47,13 @@ export const fmtSolve = (solve) =>
 /**
  * Average of the latest n (newest first), trimming the best and worst 5%,
  * at least one each side (calc_ao). A DNF (Infinity) counts as the worst
- * time, so two DNFs in an ao5 make it a DNF. null if there are too few.
+ * time, so two DNFs in an ao5 make it a DNF; ao3 trims nothing (a mean of 3).
+ * null if there are too few.
  */
 export function calcAo(times, n) {
   if (times.length < n) return null;
   const recent = times.slice(0, n).sort((a, b) => a - b);
-  if (n <= 2) return recent.reduce((a, b) => a + b, 0) / n;
+  if (n <= 3) return recent.reduce((a, b) => a + b, 0) / n;   // ao3 = mean of 3
   const trim = Math.max(1, Math.ceil(n * 0.05));
   const kept = recent.slice(trim, -trim);
   return kept.reduce((a, b) => a + b, 0) / kept.length;

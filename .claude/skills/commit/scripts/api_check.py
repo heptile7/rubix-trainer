@@ -89,6 +89,11 @@ with TestClient(app) as c:
         c.post("/api/times", json={"mode": "full", "seconds": s})
     st = c.get("/api/stats/full").json()
     check("session ao5", st["session"]["ao5"] is not None, st["session"]["ao5"])
+    check("stats: std dev, ao3 and best averages", all(k in st["session"] for k in
+          ("sd", "ao3", "best_ao3", "best_ao5", "best_ao12", "best_ao50", "best_ao100"))
+          and st["session"]["sd"] is not None and st["session"]["ao3"] is not None, sorted(st["session"]))
+    t = c.get("/api/solves/full?scope=session").json()
+    check("solve rows carry ao3", all("ao3" in x for x in t["rows"]) and t["rows"][0]["ao3"] is not None)
     all_before = st["all"]["count"]
     old_n = st["session_no"]
     r = c.post("/api/session/full", json={"name": "  GAN 12 "}).json()

@@ -7,6 +7,7 @@ Times stored in SQLite for progress tracking.
 Requirements: pip install rich
 """
 
+import bisect
 import math
 import time
 import sqlite3
@@ -300,38 +301,71 @@ def fmt_solve(seconds, penalty):
     return fmt(effective(seconds, penalty)) + ("+" if penalty == "+2" else "")
 
 
+AVERAGES = (3, 5, 12, 50, 100)     # the averages shown in statistics
+
+
+def _trimmed(window, n):
+    """The average of one sorted window of n times (see calc_ao)."""
+    if n <= 3:                        # ao3 is the plain mean of 3, as csTimer / WCA (mo3)
+        return sum(window) / n
+    trim = max(1, math.ceil(n * 0.05))
+    kept = window[trim:-trim]
+    return sum(kept) / len(kept)
+
+
 def calc_ao(times, n):
     """
     Average of the latest n times (newest first), trimming the best and worst
     5% (at least one each side), as WCA and csTimer do. A DNF (math.inf) counts
     as the worst time, so one DNF is trimmed and two make the average a DNF.
+    The average of 3 trims nothing (a mean of 3), so any DNF makes it a DNF.
     Returns None if there are fewer than n times.
     """
     if len(times) < n:
         return None
-    recent = sorted(times[:n])
-    if n <= 2:
-        return sum(recent) / n
-    trim = max(1, math.ceil(n * 0.05))
-    kept = recent[trim:-trim]
-    return sum(kept) / len(kept)
+    return _trimmed(sorted(times[:n]), n)
+
+
+def rolling_ao(times, n):
+    """
+    The average of n ending at each time: a list as long as times (newest first),
+    None where fewer than n times lead up to it. Keeps one sorted window, so it
+    stays quick for ao100 over thousands of solves.
+    """
+    out = [None] * len(times)
+    if len(times) < n:
+        return out
+    window = sorted(times[-n:])                   # the oldest n
+    i = len(times) - n
+    out[i] = _trimmed(window, n)
+    while i > 0:
+        window.pop(bisect.bisect_left(window, times[i + n - 1]))
+        i -= 1
+        bisect.insort(window, times[i])
+        out[i] = _trimmed(window, n)
+    return out
 
 
 def best_ao(times, n):
     """The best average of n over every run of n consecutive times, or None."""
-    best = None
-    for i in range(len(times) - n + 1):
-        a = calc_ao(times[i:i + n], n)
-        if best is None or a < best:
-            best = a
-    return best
+    return min((a for a in rolling_ao(times, n) if a is not None), default=None)
+
+
+def std_dev(times):
+    """Sample standard deviation of the finished times (DNFs left out), or None."""
+    ok = [t for t in times if t != DNF]
+    if len(ok) < 2:
+        return None
+    mean = sum(ok) / len(ok)
+    return math.sqrt(sum((t - mean) ** 2 for t in ok) / (len(ok) - 1))
 
 
 def solve_stats(times):
     """
     Summary of a list of times, newest first, penalties applied (DNF = math.inf):
-    count, dnf, best, worst, mean (DNFs left out of these three), current ao5 /
-    ao12 / ao50 / ao100 and the best ao5 / ao12. Missing values are None.
+    count, dnf, best, worst, mean, sd (standard deviation; DNFs left out of
+    these four), and for n in AVERAGES the current ao<n> and the best ao<n>
+    (best_ao<n>). Missing values are None.
     """
     ok = [t for t in times if t != DNF]
     stats = {
@@ -340,10 +374,10 @@ def solve_stats(times):
         "best":  min(ok) if ok else None,
         "worst": max(ok) if ok else None,
         "mean":  sum(ok) / len(ok) if ok else None,
+        "sd":    std_dev(ok),
     }
-    for n in (5, 12, 50, 100):
+    for n in AVERAGES:
         stats[f"ao{n}"] = calc_ao(times, n)
-    for n in (5, 12):
         stats[f"best_ao{n}"] = best_ao(times, n)
     return stats
 
@@ -618,12 +652,13 @@ class Database:
         """
         (rows, total) for a statistics table or the progress chart: rows are
         dicts, newest first, with the solve's fields plus `time` (penalty
-        applied) and the ao5 / ao12 ending at that solve. The averages are
+        applied) and the ao3 / ao5 / ao12 ending at that solve. The averages are
         worked out over every solve in scope (one case's, with case_name), so
         they are right even when only flagged solves are listed.
         """
         all_rows = self.solves(mode, scope, case_name=case_name)
         times = [effective(r[2], r[3]) for r in all_rows]
+        aos = {n: rolling_ao(times, n) for n in (3, 5, 12)}
         out = []
         for i, r in enumerate(all_rows):
             if flagged_only and not r[4]:
@@ -631,7 +666,7 @@ class Database:
             out.append({"n": len(all_rows) - i, "id": r[0], "case": r[1], "seconds": r[2], "penalty": r[3],
                         "flagged": bool(r[4]), "note": r[5], "ts": r[6], "session": r[7],
                         "time": times[i],
-                        "ao5": calc_ao(times[i:], 5), "ao12": calc_ao(times[i:], 12)})
+                        "ao3": aos[3][i], "ao5": aos[5][i], "ao12": aos[12][i]})
             if limit and len(out) >= limit:
                 break
         return out, len(all_rows)

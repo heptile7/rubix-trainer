@@ -290,6 +290,8 @@ table.stats td.acts { white-space: nowrap; padding-right: 4px; }
 table.stats td.acts .btn { height: 22px; padding: 0 6px; margin-left: 2px; font-size: 11px; }
 .stats-filters { justify-content: flex-start; margin: 10px 0 2px; gap: 12px; }
 .stats-screen .stat-block { margin: 2px 0 4px; }
+.stat-blocks { display: flex; flex-wrap: wrap; gap: 4px 28px; align-items: flex-start; }
+table.stat-block td.pb { color: var(--running); }   /* the session holds the all-time best */
 
 /* ---- export / import menu (stats.js) --------------------------------- */
 details.menu { position: relative; }
@@ -309,7 +311,8 @@ details.menu > summary::-webkit-details-marker { display: none; }
 .chart-svg { display: block; width: 100%; height: 340px; }
 .chart-svg .tick { fill: var(--muted); font: 11px var(--mono); }
 .chart-svg .end-label { fill: var(--text); font: 11px var(--mono); }
-.chart-svg .pb-label { fill: var(--text); font-size: 11px; font-weight: 700; }
+.chart-svg .pb-label { fill: var(--text); font-size: 11px; font-weight: 700; paint-order: stroke; stroke: var(--bg); stroke-width: 3px; }
+.chart-svg .best-label { fill: var(--text); font: 11px var(--mono); paint-order: stroke; stroke: var(--bg); stroke-width: 3px; }
 .chart-svg .session-label { fill: var(--muted); font-size: 10px; }
 .chart-tip { position: absolute; width: 170px; pointer-events: none; background: #1c1c1c; border: 1px solid #444;
              border-radius: 6px; padding: 6px 9px; font-size: 12px; color: var(--muted); }

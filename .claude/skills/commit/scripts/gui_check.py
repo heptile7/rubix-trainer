@@ -150,7 +150,7 @@ full.timer_toggle(); pump(3); time.sleep(0.12); full.timer_toggle(); pump(3)
 label = next(l for l, n in pick._numbers.items() if n == old_n)
 pick._on_pick(label); pump()
 check("switch back to the earlier session", db.current_session("full") == old_n
-      and len(panel._rows) == db.stats("full", "session")["count"])
+      and len(panel._rows) == min(db.stats("full", "session")["count"], g.HISTORY))
 pick.ask_name = lambda prompt: "Renamed"
 pick.rename_session(); pump()
 check("rename session", db.session_name("full", old_n) == "Renamed")
@@ -225,8 +225,29 @@ ok5 = [isinstance(r["ao5"], float) and r["ao5"] != ct.DNF for r in ch._data]
 line_due = any(a and b for a, b in zip(ok5, ok5[1:]))     # a line needs two averages in a row
 check("chart has ao5 line / PB", bool(ch.find_withtag("ao5")) == line_due
       and len(ch.find_withtag("pb")) == 1, f"due={line_due}")
+# Statistics' stats block: summary plus the averages table
+sb = app.screen("stats").stats_block
+check("stats block shows std dev and averages", [l for _, l in sb.rows][-1] == "Std dev"
+      and len(sb.avg_cells) == 5 and sb.avg_cells[1][1].cget("text") == ct.fmt(db.stats(app.screen("stats")._mode, "session")["best_ao5"]),
+      sb.avg_cells[1][1].cget("text"))
+# PB progression and best averages, worked out independently
+finished = [r["time"] for r in ch._data if r["time"] != ct.DNF]
+pb_runs = sorted({min(finished[:k + 1]) for k in range(len(finished))})
+check("chart PB progression", ch.pb_count == len(pb_runs)
+      and bool(ch.find_withtag("pbsteps")) == (len(finished) > 0), f"{ch.pb_count} vs {len(pb_runs)}")
+for key in ("ao3", "ao5", "ao12"):
+    vals = [r[key] for r in ch._data if isinstance(r[key], float) and r[key] != ct.DNF]
+    at = ch.best_at.get(key)
+    check(f"chart best {key} marker", (at is None and not vals)
+          or (at is not None and ch._data[at][key] == min(vals) and len(ch.find_withtag(f"best_{key}")) == 1),
+          f"{at}")
+check("chart legend", len(ch.find_withtag("legend")) == 10, len(ch.find_withtag("legend")))
 ch.show_point(ch.points - 1); pump()
 check("chart readout", len(ch.find_withtag("hover")) > 3)
+if ch.best_at.get("ao5") is not None:
+    ch.show_point(ch.best_at["ao5"]); pump()
+    texts = [ch.itemcget(i, "text") for i in ch.find_withtag("hover") if ch.type(i) == "text"]
+    check("readout marks best ao5", "★ best ao5" in texts and any(t.endswith("PB so far") for t in texts), ascii(texts))
 st.view_seg.set("Table"); st._set(); pump()
 check("chart back to table", not ch.winfo_ismapped() and len(st._rows) > 0)
 
@@ -269,6 +290,20 @@ check("real DB untouched", before == after)
 # --- data layer ---
 check("fmt", ct.fmt(61.234) in ("1:01.23",), ct.fmt(61.234))
 check("calc_ao5", ct.calc_ao([1, 2, 3, 4, 100], 5) is not None, ct.calc_ao([1,2,3,4,100],5))
+check("ao3 is a mean of 3", ct.calc_ao([3, 6, 9], 3) == 6 and ct.calc_ao([3, 6, ct.DNF], 3) == ct.DNF)
+import random as _r
+_t = [_r.uniform(8, 30) for _ in range(150)] + [ct.DNF] * 4
+_r.shuffle(_t)
+check("rolling_ao matches calc_ao", all(ct.rolling_ao(_t, n) == [ct.calc_ao(_t[i:], n) for i in range(len(_t))]
+                                        for n in (3, 5, 12, 50, 100)))
+_ok = [t for t in _t if t != ct.DNF]
+_m = sum(_ok) / len(_ok)
+check("std dev", abs(ct.std_dev(_t) - (sum((t - _m) ** 2 for t in _ok) / (len(_ok) - 1)) ** 0.5) < 1e-9
+      and ct.std_dev([5.0]) is None)
+_s = ct.solve_stats(_t)
+check("solve_stats has sd and every average",
+      all(k in _s for k in ("sd", "ao3", "best_ao3", "best_ao50", "best_ao100"))
+      and _s["best_ao100"] <= _s["ao100"], sorted(_s))
 check("scramble len", len(ct.generate_scramble().split()) >= 15, ct.generate_scramble())
 check("setup_scramble", all(ct.setup_scramble(c) for c in ct.OLL_CASES + ct.PLL_CASES))
 

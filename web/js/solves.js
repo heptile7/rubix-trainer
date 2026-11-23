@@ -1,6 +1,7 @@
 // Sessions and single solves, shared by Full Solve, the OLL / PLL trainers and
 // Statistics (the web side of SessionPanel in cube_timer_gui.py):
-//   statsBlock      - session vs all-time summary (count, best, mean, ao5 ...)
+//   statsBlock      - session vs all-time summary (count, best, mean, std dev,
+//                     current and best ao3 ... ao100)
 //   solveAction     - +2 / DNF / OK, flag (with a note), note, delete
 //   sessionPanel    - "Session N" + New session, the stats and the history list
 //   previousSolve   - card beside the clock: the newest attempt's time, case and
@@ -10,32 +11,81 @@
 
 import { h, fmt, fmtSolve } from "./util.js";
 
-export const STAT_ROWS = [
-  ["count", "Solves"], ["best", "Best"], ["worst", "Worst"], ["mean", "Mean"],
-  ["ao5", "ao5"], ["ao12", "ao12"], ["ao50", "ao50"], ["ao100", "ao100"],
+export const SUMMARY_ROWS = [
+  ["count", "Solves"], ["best", "Best"], ["worst", "Worst"], ["mean", "Mean"], ["sd", "Std dev"],
+];
+export const AVERAGES = [3, 5, 12, 50, 100];
+// the side panel's single table (Full Solve, the trainers' History tab)
+const COMPACT_ROWS = [
+  ["count", "Solves"], ["best", "Best"], ["mean", "Mean"], ["sd", "Std dev"],
+  ["ao5", "ao5"], ["ao12", "ao12"], ["ao100", "ao100"],
   ["best_ao5", "Best ao5"], ["best_ao12", "Best ao12"],
 ];
+const SD_TITLE = "Standard deviation of the finished solves: how consistent they are (lower is steadier)";
 
 const statValue = (st, key) =>
   key === "count" ? (st.dnf ? `${st.count}  (${st.dnf} DNF)` : String(st.count)) : fmt(st[key]);
 
-/** Two-column table: this session and all time. update(stats) takes store.stats[mode]. */
-export function statsBlock({ compact = false } = {}) {
-  const rows = compact ? STAT_ROWS.filter(([k]) => !["worst", "ao50"].includes(k)) : STAT_ROWS;
-  const sessionHead = h("th", { text: "Session" });
-  const cells = rows.map(() => [h("td.num"), h("td.num")]);
+/** A table: [label, ...cells] rows under a head row. */
+function grid(head, rows, ncols) {
+  const heads = head.map((t) => h("th", { text: t }));
+  const cells = rows.map(() => Array.from({ length: ncols }, () => h("td.num")));
   const el = h("table.stat-block", null,
-    h("thead", null, h("tr", null, h("th"), sessionHead, h("th", { text: "All time" }))),
-    h("tbody", null, ...rows.map(([, label], i) => h("tr", null, h("th", { text: label }), ...cells[i]))));
-  function update(stats) {
-    sessionHead.textContent = stats.session_name || `Session ${stats.session_no}`;
-    sessionHead.title = "The selected session";
-    rows.forEach(([key], i) => {
-      cells[i][0].textContent = statValue(stats.session, key);
-      cells[i][1].textContent = statValue(stats.all, key);
-    });
+    h("thead", null, h("tr", null, h("th"), ...heads)),
+    h("tbody", null, ...rows.map(([key, label], i) =>
+      h("tr", { "data-key": key, title: key === "sd" ? SD_TITLE : "" }, h("th", { text: label }), ...cells[i]))));
+  return { el, heads, cells };
+}
+
+/**
+ * Session vs all-time stats; update(stats) takes store.stats[mode].
+ * compact: one table (session | all time). Otherwise, as on Statistics, a
+ * summary table (session | all time) and an averages table: each ao<n> now,
+ * the best in the session and the best of all time.
+ */
+export function statsBlock({ compact = false } = {}) {
+  if (compact) {
+    const t = grid(["Session", "All time"], COMPACT_ROWS, 2);
+    return {
+      el: t.el,
+      update(stats) {
+        t.heads[0].textContent = stats.session_name || `Session ${stats.session_no}`;
+        t.heads[0].title = "The selected session";
+        COMPACT_ROWS.forEach(([key], i) => {
+          t.cells[i][0].textContent = statValue(stats.session, key);
+          t.cells[i][1].textContent = statValue(stats.all, key);
+        });
+      },
+    };
   }
-  return { el, update };
+  const sum = grid(["Session", "All time"], SUMMARY_ROWS, 2);
+  const avgRows = AVERAGES.map((n) => [`ao${n}`, `ao${n}`]);
+  const avg = grid(["Current", "Session best", "All-time best"], avgRows, 3);
+  avg.heads[0].title = "The average of your latest n solves in the session";
+  avgRows[0] && (avg.el.querySelector("tbody th").title = "ao3 is the mean of 3 (nothing trimmed)");
+  const el = h("div.stat-blocks", null, sum.el, avg.el);
+  return {
+    el,
+    update(stats) {
+      sum.heads[0].textContent = stats.session_name || `Session ${stats.session_no}`;
+      sum.heads[0].title = "The selected session";
+      SUMMARY_ROWS.forEach(([key], i) => {
+        sum.cells[i][0].textContent = statValue(stats.session, key);
+        sum.cells[i][1].textContent = statValue(stats.all, key);
+      });
+      AVERAGES.forEach((n, i) => {
+        const [now, sbest, abest] = avg.cells[i];
+        now.textContent = fmt(stats.session[`ao${n}`]);
+        sbest.textContent = fmt(stats.session[`best_ao${n}`]);
+        abest.textContent = fmt(stats.all[`best_ao${n}`]);
+        // the session holds the all-time best (worth saying only if there are older solves)
+        const pb = stats.all.count > stats.session.count && stats.all[`best_ao${n}`] != null
+          && stats.session[`best_ao${n}`] === stats.all[`best_ao${n}`];
+        sbest.classList.toggle("pb", pb);
+        abest.classList.toggle("pb", pb);
+      });
+    },
+  };
 }
 
 /** Apply one action to a saved solve. Resolves when the store has the server's answer. */

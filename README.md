@@ -124,10 +124,11 @@ In **Statistics**, choose **Chart** (web app) or **Chart** next to *Table* (desk
 
 - grey dots are single solves; a hollow ring is a +2, and an × along the top is a DNF;
 - the blue line is your ao5 and the orange line your ao12 (a DNF average leaves a gap);
-- a ring marks your best single (**PB**);
+- a ring marks your best single (**PB**), and a dotted step line traces your PB over time: it drops at each solve that set a new PB, so you can see how often and by how much it improved;
+- diamonds mark your **best ao3** (green), **best ao5** (blue) and **best ao12** (orange), each labelled with its time, at the solve where that average ended;
 - in *All time*, a thin vertical line with the session's name shows where each session starts, so you can compare cubes.
 
-Move the mouse over the chart (or, in the web app, focus it and use the arrow keys) to read a solve's time, ao5, ao12, note and date. For OLL / PLL, a menu narrows the chart to one case. The Solves table shows the same values without hovering.
+A legend above the chart names each mark. Move the mouse over the chart (or, in the web app, focus it and use the arrow keys) to read a solve's time, ao3, ao5, ao12, your PB at that point, note and date; the readout also says when that solve set a new PB or ended a best average. For OLL / PLL, a menu narrows the chart to one case. The Solves table shows the same values without hovering.
 
 ### Inspection and hold to start
 
@@ -140,7 +141,7 @@ The switches under the timer change how a solve starts. They are saved and share
 
 ### Sessions, penalties and flags
 
-Full Solve, OLL and PLL each keep their own list of named **sessions**, for example one per cube (*GAN 12*, *MoYu OH*). The menu at the top of the session column picks the session that new solves go into; its history and stats show below, next to the **all-time** stats of every session together. **New…** creates a session (asking for a name), **Rename…** renames the selected one, and **Delete…** deletes it with its solves (after asking; the last session can't be deleted). Statistics has the same menu. **Delete Last** only removes solves from the selected session. The stats are: number of solves (and DNFs), best, worst, mean, the current ao5 / ao12 / ao50 / ao100, and the best ao5 and ao12.
+Full Solve, OLL and PLL each keep their own list of named **sessions**, for example one per cube (*GAN 12*, *MoYu OH*). The menu at the top of the session column picks the session that new solves go into; its history and stats show below, next to the **all-time** stats of every session together. **New…** creates a session (asking for a name), **Rename…** renames the selected one, and **Delete…** deletes it with its solves (after asking; the last session can't be deleted). Statistics has the same menu. **Delete Last** only removes solves from the selected session. The stats are: number of solves (and DNFs), best, worst, mean and standard deviation (*Std dev*: how consistent your times are; lower is steadier; DNFs are left out), and the current and best ao3 / ao5 / ao12 / ao50 / ao100. On Statistics these come as two tables: the summary for the session and all time, and the averages with their current value, the session's best and the all-time best (green when this session holds the all-time best). The side columns of the timer screens show a shorter list. ao3 is the plain mean of 3 (nothing trimmed, so one DNF makes it a DNF), as csTimer and WCA count a mean of 3; the longer averages trim the best and worst 5%.
 
 - **Beside the clock**, the *Previous solve* card has **OK / +2 / DNF / ⚑ Flag** for the attempt you just did, with its time, case and scramble.
 - **In the history**, click any solve to fix it: **+2** adds two seconds, **DNF** marks it as not finished, **OK** clears the penalty, **✕** deletes it (for a mis-start or any solve that shouldn't count). Click the same button again to undo a penalty.
