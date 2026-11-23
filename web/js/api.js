@@ -42,6 +42,7 @@ export const api = {
   deal:         (mode, name) => call("GET", `/api/deal/${mode}/${enc(name)}`),
   times:        (mode, limit = 50) => call("GET", `/api/times/${mode}?limit=${limit}`),
   summary:      (mode) => call("GET", `/api/summary/${mode}`),
+  stats:        (mode) => call("GET", `/api/stats/${mode}`),
   addTime:      (attempt) => write("POST", "/api/times", attempt),
   deleteLast:   (mode) => write("DELETE", `/api/times/last/${mode}`),
   solves:       (mode, scope, flagged, limit = 200, caseName = "") =>

@@ -255,6 +255,9 @@ DEFAULT_SETTINGS = {
     "inspection_voice": False,       # say "eight seconds" / "twelve seconds" (WCA)
     "hold_to_start": True,
     "hold_ms": 300,
+    # OLL / PLL averages over finished solves only (a DNF there is usually a
+    # misrecognised case, not a slow one); Full Solve always follows WCA rules
+    "averages_skip_dnf": True,
 }
 SETTING_CHOICES = {
     "inspection_seconds.oll": (5, 8, 12, 15),
@@ -360,25 +363,49 @@ def std_dev(times):
     return math.sqrt(sum((t - mean) ** 2 for t in ok) / (len(ok) - 1))
 
 
-def solve_stats(times):
+def rolling_ao_finished(times, n):
+    """
+    Like rolling_ao, but over finished solves only: at each solve, the average
+    of the latest n finished solves up to it. A DNF row gets the value of the
+    finished solve before it (the same n solves), so the line has no gap.
+    """
+    ok_idx = [i for i, t in enumerate(times) if t != DNF]
+    rolled = rolling_ao([times[i] for i in ok_idx], n)
+    out = [None] * len(times)
+    k = len(ok_idx) - 1               # newest-first lists: walk from the oldest
+    value = None
+    for i in range(len(times) - 1, -1, -1):
+        if k >= 0 and ok_idx[k] == i:
+            value = rolled[k]
+            k -= 1
+        out[i] = value
+    return out
+
+
+def solve_stats(times, skip_dnf=False):
     """
     Summary of a list of times, newest first, penalties applied (DNF = math.inf):
-    count, dnf, best, worst, mean, sd (standard deviation; DNFs left out of
-    these four), and for n in AVERAGES the current ao<n> and the best ao<n>
-    (best_ao<n>). Missing values are None.
+    count, dnf, dnf_rate (0..1), best, worst, mean, sd (standard deviation;
+    DNFs left out of these four), and for n in AVERAGES the current ao<n> and
+    the best ao<n> (best_ao<n>). Averages follow WCA rules (a DNF is the worst
+    time), or with skip_dnf are taken over the finished solves only; the
+    result says which in skip_dnf. Missing values are None.
     """
     ok = [t for t in times if t != DNF]
     stats = {
         "count": len(times),
         "dnf":   len(times) - len(ok),
+        "dnf_rate": (len(times) - len(ok)) / len(times) if times else None,
         "best":  min(ok) if ok else None,
         "worst": max(ok) if ok else None,
         "mean":  sum(ok) / len(ok) if ok else None,
         "sd":    std_dev(ok),
+        "skip_dnf": bool(skip_dnf),
     }
+    pool = ok if skip_dnf else times
     for n in AVERAGES:
-        stats[f"ao{n}"] = calc_ao(times, n)
-        stats[f"best_ao{n}"] = best_ao(times, n)
+        stats[f"ao{n}"] = calc_ao(pool, n)
+        stats[f"best_ao{n}"] = best_ao(pool, n)
     return stats
 
 
@@ -654,11 +681,13 @@ class Database:
         dicts, newest first, with the solve's fields plus `time` (penalty
         applied) and the ao3 / ao5 / ao12 ending at that solve. The averages are
         worked out over every solve in scope (one case's, with case_name), so
-        they are right even when only flagged solves are listed.
+        they are right even when only flagged solves are listed. For OLL / PLL
+        with the averages_skip_dnf setting, they leave DNFs out (skips_dnf).
         """
         all_rows = self.solves(mode, scope, case_name=case_name)
         times = [effective(r[2], r[3]) for r in all_rows]
-        aos = {n: rolling_ao(times, n) for n in (3, 5, 12)}
+        roll = rolling_ao_finished if self.skips_dnf(mode) else rolling_ao
+        aos = {n: roll(times, n) for n in (3, 5, 12)}
         out = []
         for i, r in enumerate(all_rows):
             if flagged_only and not r[4]:
@@ -671,9 +700,14 @@ class Database:
                 break
         return out, len(all_rows)
 
+    def skips_dnf(self, mode):
+        """Whether this mode's averages leave DNFs out: OLL / PLL with averages_skip_dnf."""
+        return mode != "full" and bool(self.get_settings()["averages_skip_dnf"])
+
     def stats(self, mode, scope="all"):
         """solve_stats() of every attempt in this mode, or of the current session."""
-        return solve_stats([effective(r[2], r[3]) for r in self.solves(mode, scope)])
+        return solve_stats([effective(r[2], r[3]) for r in self.solves(mode, scope)],
+                           skip_dnf=self.skips_dnf(mode))
 
     def get_custom_groups(self, mode):
         """{group name: set of case names} for the user's own groups."""

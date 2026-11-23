@@ -6,7 +6,7 @@
 
 import { api } from "./api.js";
 import { h, fmt, fmtSolve } from "./util.js";
-import { statsBlock, solveAction, timeClass, sessionPicker } from "./solves.js";
+import { statsBlock, solveAction, timeClass, sessionPicker, averageRule } from "./solves.js";
 import { progressChart } from "./chart.js";
 
 const LIMIT = 200;      // rows listed at most (the stats cover every solve)
@@ -108,7 +108,16 @@ export function statsScreen(store) {
   let token = 0;
   let shown = false;
 
-  const summary = statsBlock();
+  // OLL / PLL only: averages over finished solves (on by default) or WCA averages
+  const dnfBox = h("input", { type: "checkbox", onchange: async () => {
+    dnfBox.blur();
+    await store.setSkipDnf(dnfBox.checked);
+    show();
+  } });
+  const dnfLabel = h("label.switch.skip-dnf", { title: "A DNF in a drill is usually a misrecognised case. " +
+    "With this on, OLL and PLL averages use your finished solves only; the DNF rate shows how many you missed. " +
+    "Full Solve always follows WCA rules." }, dnfBox, "Leave DNFs out of OLL / PLL averages");
+  const summary = statsBlock({ extra: dnfLabel });
   const body = h("div");
   const note = h("div.hint", { style: "text-align:left" });
   const tabs = seg([["full", "Full Solve"], ["oll", "OLL"], ["pll", "PLL"]], (k) => {
@@ -141,6 +150,8 @@ export function statsScreen(store) {
   async function show() {
     const t = ++token;
     summary.update(store.stats[mode]);
+    dnfLabel.hidden = mode === "full";
+    dnfBox.checked = !!store.settings.averages_skip_dnf;
     for (const [m, p] of Object.entries(pickers)) { p.el.hidden = m !== mode; if (m === mode) p.refresh(); }
     viewSeg.el.querySelector("[data-key=cases]").hidden = mode === "full";
     flagLabel.hidden = view !== "solves";
@@ -160,10 +171,11 @@ export function statsScreen(store) {
         pickers[mode].refresh();
         summary.update(store.stats[mode]);
         const names = Object.fromEntries(fresh.sessions.map((x) => [x.n, x.name]));
-        chart.update(r.rows, names, scope === "all");
+        chart.update(r.rows, names, scope === "all", !!fresh.session.skip_dnf);
         note.textContent = (r.rows.length >= CHART_LIMIT ? `Latest ${CHART_LIMIT} shown; ` : "") +
           `${r.rows.length} solve(s)${caseName ? ` of ${caseName}` : ""} in ` +
-          `${scope === "session" ? `“${fresh.session_name}”` : "all sessions"}. Hover or use the arrow keys for values.`;
+          `${scope === "session" ? `“${fresh.session_name}”` : "all sessions"}. ${averageRule(fresh.session)} ` +
+          "Hover or use the arrow keys for values.";
         return;
       }
       if (mode !== "full" && view === "cases") {

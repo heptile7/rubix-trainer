@@ -291,6 +291,9 @@ table.stats td.acts .btn { height: 22px; padding: 0 6px; margin-left: 2px; font-
 .stats-filters { justify-content: flex-start; margin: 10px 0 2px; gap: 12px; }
 .stats-screen .stat-block { margin: 2px 0 4px; }
 .stat-blocks { display: flex; flex-wrap: wrap; gap: 4px 28px; align-items: flex-start; }
+.avg-col { display: flex; flex-direction: column; gap: 2px; }
+.avg-rule { margin: 0 6px; font-size: 11px; color: var(--muted); max-width: 360px; }
+.avg-col .switch { font-size: 12px; color: var(--muted); margin: 2px 6px 0; }
 table.stat-block td.pb { color: var(--running); }   /* the session holds the all-time best */
 
 /* ---- export / import menu (stats.js) --------------------------------- */

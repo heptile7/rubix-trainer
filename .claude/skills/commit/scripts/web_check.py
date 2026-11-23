@@ -343,7 +343,7 @@ with sync_playwright() as p:
     check("chart PB progression", marks["pb"] == _pbs and marks["steps"] == (len(_fin) > 0), f"{marks} vs {_pbs}")
     check("chart best-average diamonds", marks["diamonds"] == len(marks["best"])
           and set(marks["best"]) == {k for k, n in (("ao3", 3), ("ao5", 5), ("ao12", 12)) if pts >= n}
-          and marks["legend"] == 10, marks)
+          and marks["legend"] == 11, marks)
     box = page.locator(".shown .chart-svg").bounding_box()
     page.mouse.move(box["x"] + box["width"] / 2, box["y"] + 120); page.wait_for_timeout(100)
     tip = page.inner_text(".shown .chart-tip")
@@ -351,6 +351,21 @@ with sync_playwright() as p:
     page.mouse.move(2, 2)
     page.screenshot(path=os.path.join(SHOTS, "web_chart.png"))
     page.click(".shown .stats-filters button[data-key=solves]"); page.wait_for_timeout(200)
+    check("skip-DNF switch hidden for Full Solve", page.locator(".shown .skip-dnf").is_hidden())
+    page.click(".shown .tabs button[data-key=pll]"); page.wait_for_timeout(300)
+    was = page.evaluate("window.cubeApp.store.settings.averages_skip_dnf")
+    check("skip-DNF switch shown for PLL", page.locator(".shown .skip-dnf").is_visible()
+          and page.is_checked(".shown .skip-dnf input") == was)
+    page.click(".shown .skip-dnf input"); page.wait_for_timeout(600)
+    flipped = page.evaluate("""() => { const s = window.cubeApp.store;
+        return [s.settings.averages_skip_dnf, s.stats.pll.session.skip_dnf, s.stats.oll.session.skip_dnf,
+                document.querySelector('.shown .avg-rule').textContent]; }""")
+    with sqlite3.connect(tmp) as _c:
+        saved = _c.execute("SELECT value FROM settings WHERE key='averages_skip_dnf'").fetchone()
+    check("skip-DNF switch saves and refetches stats", flipped[:3] == [not was] * 3
+          and saved and saved[0] == ("true" if not was else "false")
+          and ("WCA" in flipped[3]) == was, str(flipped))
+    page.click(".shown .skip-dnf input"); page.wait_for_timeout(600)
     page.click(".shown .tabs button[data-key=oll]"); page.wait_for_timeout(150)
     page.click(".shown .stats-filters button[data-key=cases]"); page.wait_for_timeout(300)
     check("stats oll table", page.locator(".shown table.stats tbody tr").count() == 57)

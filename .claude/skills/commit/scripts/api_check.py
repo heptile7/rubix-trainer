@@ -136,6 +136,17 @@ with TestClient(app) as c:
           and c.put("/api/settings", json={"values": {"inspection.oll": "yes"}}).status_code == 400)
     r = c.post("/api/times", json={"mode": "full", "seconds": 12.0, "penalty": "+2"}).json()
     check("attempt with +2", r["recent"][0]["penalty"] == "+2")
+    # OLL / PLL averages leave DNFs out by default; Full Solve always follows WCA
+    c.put("/api/settings", json={"values": {"averages_skip_dnf": True}})
+    on = c.get("/api/stats/pll").json()["session"]
+    c.put("/api/settings", json={"values": {"averages_skip_dnf": False}})
+    off = c.get("/api/stats/pll").json()["session"]
+    full = c.get("/api/stats/full").json()["session"]
+    check("averages_skip_dnf setting", on["skip_dnf"] is True and off["skip_dnf"] is False
+          and full["skip_dnf"] is False and "dnf_rate" in on, (on["skip_dnf"], off["skip_dnf"]))
+    check("bad averages_skip_dnf 400",
+          c.put("/api/settings", json={"values": {"averages_skip_dnf": 1}}).status_code == 400)
+    c.put("/api/settings", json={"values": {"averages_skip_dnf": True}})
     r = c.post("/api/times", json={"mode": "full", "seconds": 0, "penalty": "dnf"}).json()
     check("inspection DNF (0 s)", r["recent"][0]["penalty"] == "dnf")
     check("0 s without DNF 400", c.post("/api/times", json={"mode": "full", "seconds": 0}).status_code == 400)

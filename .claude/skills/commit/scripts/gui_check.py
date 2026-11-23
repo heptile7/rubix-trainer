@@ -241,13 +241,42 @@ for key in ("ao3", "ao5", "ao12"):
     check(f"chart best {key} marker", (at is None and not vals)
           or (at is not None and ch._data[at][key] == min(vals) and len(ch.find_withtag(f"best_{key}")) == 1),
           f"{at}")
-check("chart legend", len(ch.find_withtag("legend")) == 10, len(ch.find_withtag("legend")))
+check("chart legend", len(ch.find_withtag("legend")) == 10 + bool(ch.gaps), len(ch.find_withtag("legend")))
 ch.show_point(ch.points - 1); pump()
 check("chart readout", len(ch.find_withtag("hover")) > 3)
 if ch.best_at.get("ao5") is not None:
     ch.show_point(ch.best_at["ao5"]); pump()
     texts = [ch.itemcget(i, "text") for i in ch.find_withtag("hover") if ch.type(i) == "text"]
     check("readout marks best ao5", "★ best ao5" in texts and any(t.endswith("PB so far") for t in texts), ascii(texts))
+# DNF gaps: made-up rows, oldest first: two DNFs together make ao5 a DNF for 4 solves
+_times = [3.0, 3.1, 3.2, 3.3, 3.4, ct.DNF, ct.DNF, 3.5, 3.6, 3.7, 3.8, 3.9, 3.0]
+_new = _times[::-1]
+_mk = lambda roll: [{"n": len(_new) - i, "id": i, "case": "T Perm", "seconds": 0 if t == ct.DNF else t,
+                     "penalty": "dnf" if t == ct.DNF else None, "flagged": False, "note": None,
+                     "ts": "2026-01-01", "session": 1, "time": t,
+                     **{f"ao{k}": roll(_new, k)[i] for k in (3, 5, 12)}} for i, t in enumerate(_new)]
+ch.update_rows(_mk(ct.rolling_ao), {}, False, skip_dnf=False); pump()
+check("chart bridges a DNF gap", ch.gaps >= 1 and len(ch.find_withtag("gap_ao5")) >= 1
+      and len(ch.find_withtag("legend")) == 11, f"{ch.gaps}")
+_i = next(i for i, r in enumerate(ch._data) if r["ao5"] == ct.DNF)
+ch.show_point(_i); pump()
+_texts = [ch.itemcget(i, "text") for i in ch.find_withtag("hover") if ch.type(i) == "text"]
+check("readout counts the DNFs in an average", any("ao5 · " in t and "DNF" in t for t in _texts), ascii(_texts))
+ch.update_rows(_mk(ct.rolling_ao_finished), {}, False, skip_dnf=True); pump()
+check("no gaps when averages leave DNFs out", ch.gaps == 0 and not ch.find_withtag("gap")
+      and all(isinstance(r["ao5"], float) and r["ao5"] != ct.DNF for r in ch._data[4:]))
+# the switch on Statistics (OLL / PLL only) saves the shared setting
+st._set(mode="pll", scope="session"); pump()
+was = db.get_settings()["averages_skip_dnf"]
+check("skip-DNF switch shown for PLL", bool(st.skip_dnf.winfo_manager()) and bool(st.skip_dnf.get()) == was)
+st.skip_dnf.toggle(); pump()
+check("skip-DNF switch saves and repaints", db.get_settings()["averages_skip_dnf"] == (not was)
+      and db.stats("pll", "session")["skip_dnf"] == (not was) and ch.skip_dnf == (not was)
+      and ("WCA" in st.stats_block.rule.cget("text")) == was)
+st.skip_dnf.toggle(); pump()
+st._set(mode="full"); pump()
+check("skip-DNF switch hidden for Full Solve", not st.skip_dnf.winfo_manager()
+      and db.stats("full", "session")["skip_dnf"] is False)
 st.view_seg.set("Table"); st._set(); pump()
 check("chart back to table", not ch.winfo_ismapped() and len(st._rows) > 0)
 
@@ -297,6 +326,15 @@ _r.shuffle(_t)
 check("rolling_ao matches calc_ao", all(ct.rolling_ao(_t, n) == [ct.calc_ao(_t[i:], n) for i in range(len(_t))]
                                         for n in (3, 5, 12, 50, 100)))
 _ok = [t for t in _t if t != ct.DNF]
+_rf = ct.rolling_ao_finished(_t, 5)
+_okidx = [i for i, t in enumerate(_t) if t != ct.DNF]
+check("rolling_ao_finished: DNFs left out, carried over a DNF",
+      all(_rf[i] == ct.calc_ao(_ok[k:], 5) for k, i in enumerate(_okidx))
+      and all(_rf[i] == next((_rf[j] for j in range(i + 1, len(_t)) if _t[j] != ct.DNF), None)
+              for i in range(len(_t)) if _t[i] == ct.DNF))
+check("solve_stats skip_dnf", ct.solve_stats([3.0, ct.DNF, ct.DNF, 4.0, 5.0, 6.0, 7.0], skip_dnf=True)["ao5"] == 5.0
+      and ct.solve_stats([3.0, ct.DNF, ct.DNF, 4.0, 5.0, 6.0, 7.0])["ao5"] == ct.DNF
+      and abs(ct.solve_stats([1.0, ct.DNF, 2.0, 3.0])["dnf_rate"] - 0.25) < 1e-12)
 _m = sum(_ok) / len(_ok)
 check("std dev", abs(ct.std_dev(_t) - (sum((t - _m) ** 2 for t in _ok) / (len(_ok) - 1)) ** 0.5) < 1e-9
       and ct.std_dev([5.0]) is None)

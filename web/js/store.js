@@ -203,6 +203,20 @@ export class Store {
     api.saveSettings({ [key]: value });
   }
 
+  /**
+   * Leave DNFs out of OLL / PLL averages, or not. Saved first, then the
+   * trainers' stats are fetched again and the time listeners repaint.
+   */
+  async setSkipDnf(on) {
+    this.settings.averages_skip_dnf = on;
+    for (const fn of this._settingListeners) fn("averages_skip_dnf");
+    await api.saveSettings({ averages_skip_dnf: on });
+    for (const mode of ["oll", "pll"]) {
+      const stats = await api.stats(mode);
+      this.applyTimes(mode, null, { recent: this.recent[mode], stats });
+    }
+  }
+
   /** What a Timer needs for this mode (see Timer.options). */
   timerOptions(mode) {
     const s = this.settings;

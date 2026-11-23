@@ -12,7 +12,7 @@
 import { h, fmt, fmtSolve } from "./util.js";
 
 export const SUMMARY_ROWS = [
-  ["count", "Solves"], ["best", "Best"], ["worst", "Worst"], ["mean", "Mean"], ["sd", "Std dev"],
+  ["count", "Solves"], ["dnf_rate", "DNF rate"], ["best", "Best"], ["worst", "Worst"], ["mean", "Mean"], ["sd", "Std dev"],
 ];
 export const AVERAGES = [3, 5, 12, 50, 100];
 // the side panel's single table (Full Solve, the trainers' History tab)
@@ -24,7 +24,14 @@ const COMPACT_ROWS = [
 const SD_TITLE = "Standard deviation of the finished solves: how consistent they are (lower is steadier)";
 
 const statValue = (st, key) =>
-  key === "count" ? (st.dnf ? `${st.count}  (${st.dnf} DNF)` : String(st.count)) : fmt(st[key]);
+  key === "count" ? (st.dnf ? `${st.count}  (${st.dnf} DNF)` : String(st.count))
+  : key === "dnf_rate" ? (st.dnf_rate == null ? "—" : `${(st.dnf_rate * 100).toFixed(1)}%`)
+  : fmt(st[key]);
+
+/** One line saying how DNFs count in the averages shown. */
+export const averageRule = (st) => st && st.skip_dnf
+  ? "DNFs are left out of these averages (finished solves only)."
+  : "WCA averages: a DNF counts as the slowest time, so two in an ao5 or ao12 make it a DNF.";
 
 /** A table: [label, ...cells] rows under a head row. */
 function grid(head, rows, ncols) {
@@ -43,7 +50,7 @@ function grid(head, rows, ncols) {
  * summary table (session | all time) and an averages table: each ao<n> now,
  * the best in the session and the best of all time.
  */
-export function statsBlock({ compact = false } = {}) {
+export function statsBlock({ compact = false, extra = null } = {}) {
   if (compact) {
     const t = grid(["Session", "All time"], COMPACT_ROWS, 2);
     return {
@@ -63,12 +70,14 @@ export function statsBlock({ compact = false } = {}) {
   const avg = grid(["Current", "Session best", "All-time best"], avgRows, 3);
   avg.heads[0].title = "The average of your latest n solves in the session";
   avgRows[0] && (avg.el.querySelector("tbody th").title = "ao3 is the mean of 3 (nothing trimmed)");
-  const el = h("div.stat-blocks", null, sum.el, avg.el);
+  const rule = h("p.avg-rule");
+  const el = h("div.stat-blocks", null, sum.el, h("div.avg-col", null, avg.el, rule, ...(extra ? [extra] : [])));
   return {
     el,
     update(stats) {
       sum.heads[0].textContent = stats.session_name || `Session ${stats.session_no}`;
       sum.heads[0].title = "The selected session";
+      rule.textContent = averageRule(stats.session);
       SUMMARY_ROWS.forEach(([key], i) => {
         sum.cells[i][0].textContent = statValue(stats.session, key);
         sum.cells[i][1].textContent = statValue(stats.all, key);

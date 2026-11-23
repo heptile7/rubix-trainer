@@ -1,7 +1,9 @@
 // Progress chart for Statistics: x = solve number, y = time.
 //   single solves   grey dots (+2: a hollow ring; DNF: an × along the top band)
 //   ao5 / ao12      2px lines (blue / orange, validated on the dark surface);
-//                   a DNF average breaks the line
+//                   a DNF average (WCA rules) breaks the line, and a faded dashed
+//                   bridge joins the two ends so the gap reads as "DNF here".
+//                   OLL / PLL averages can leave DNFs out (skipDnf): no gaps then
 //   PB              a ring round the best single, labelled; a dotted step line
 //                   traces the PB so far (it drops at each new PB)
 //   best averages   a diamond, labelled, where the best ao3 / ao5 / ao12 ended
@@ -48,7 +50,7 @@ export function progressChart() {
   const el = h("div.chart", null, legend, wrap, empty);
 
   let data = [], sessions = {}, allTime = false, width = 0, hover = -1;
-  let pbSoFar = [], pbCount = 0, bestAt = {};
+  let pbSoFar = [], pbCount = 0, bestAt = {}, skipDnf = false, gaps = 0;
   let x = () => 0, y = () => 0, cross = null, focusDot = null;
 
   legend.append(
@@ -56,10 +58,14 @@ export function progressChart() {
     key("line", COLORS.ao5, "ao5"), key("line", COLORS.ao12, "ao12"), key("pb", COLORS.text, "PB"),
     key("steps", COLORS.text, "PB progression"), key("diamond", COLORS.ao3, "Best ao3"),
     key("diamond", COLORS.ao5, "Best ao5"), key("diamond", COLORS.ao12, "Best ao12"));
+  const gapKey = key("gap", COLORS.ao5, "DNF average");
+  gapKey.title = "Under WCA rules two DNFs in an ao5 or ao12 make it a DNF; the dashed line spans those solves";
+  legend.append(gapKey);
 
   function key(kind, color, label) {
     const k = s("svg", { width: 18, height: 10, class: "key" });
-    if (kind === "line") k.append(s("line", { x1: 1, y1: 5, x2: 17, y2: 5, stroke: color, "stroke-width": 2, "stroke-linecap": "round" }));
+    if (kind === "gap") k.append(s("line", { x1: 1, y1: 5, x2: 17, y2: 5, stroke: color, "stroke-width": 1.5, "stroke-dasharray": "3 3", "stroke-opacity": 0.5 }));
+    else if (kind === "line") k.append(s("line", { x1: 1, y1: 5, x2: 17, y2: 5, stroke: color, "stroke-width": 2, "stroke-linecap": "round" }));
     else if (kind === "steps") k.append(s("path", { d: "M1 2 H8 V8 H17", fill: "none", stroke: color, "stroke-width": 1.5, "stroke-dasharray": "2 2" }));
     else if (kind === "diamond") k.append(s("path", { d: "M9 0 L14 5 L9 10 L4 5 Z", fill: color }));
     else if (kind === "dot") k.append(s("circle", { cx: 9, cy: 5, r: 3, fill: color }));
@@ -71,10 +77,12 @@ export function progressChart() {
   }
 
   /** rows: newest first (api.solves); names: {session number: name}; all: draw session changes. */
-  function update(rows, names = {}, all = false) {
+  /** skip: the averages leave DNFs out (stats.skip_dnf), so they have no DNF gaps. */
+  function update(rows, names = {}, all = false, skip = false) {
     data = rows.slice().reverse();
     sessions = names;
     allTime = all;
+    skipDnf = skip;
     hover = -1;
     draw();
   }
@@ -153,17 +161,32 @@ export function progressChart() {
                s("path", { d: rings, fill: "none", stroke: COLORS.single, "stroke-width": 1.3, class: "rings" }),
                s("path", { d: crosses, stroke: COLORS.muted, "stroke-width": 1.4, class: "dnfs" }));
 
-    // averages: break the line at a missing or DNF average
+    // averages: break the line at a missing or DNF average; bridge a DNF gap
+    gaps = 0;
     for (const keyName of ["ao12", "ao5"]) {
-      let d = "", pen = false, last = -1;
+      let d = "", bridge = "", pen = false, last = -1, inGap = false, end = null;
       data.forEach((row, i) => {
         const v = num(row[keyName]);
-        if (v == null) { pen = false; return; }
-        d += `${pen ? "L" : "M"}${x(i).toFixed(1)} ${y(v).toFixed(1)}`;
+        if (v == null) {
+          pen = false;
+          if (row[keyName] === "DNF" || row[keyName] === Infinity) inGap = true;
+          return;
+        }
+        const px = x(i).toFixed(1), py = y(v).toFixed(1);
+        if (inGap && end) { bridge += `M${end}L${px} ${py}`; gaps++; }
+        inGap = false;
+        d += `${pen ? "L" : "M"}${px} ${py}`;
         pen = true;
+        end = `${px} ${py}`;
         last = i;
       });
+      if (inGap && end) {           // the average is still a DNF at the latest solve
+        bridge += `M${end}L${x(n - 1).toFixed(1)} ${end.split(" ")[1]}`;
+        gaps++;
+      }
       if (!d) continue;
+      if (bridge) svg.append(s("path", { d: bridge, fill: "none", stroke: COLORS[keyName], "stroke-width": 1.5,
+                                         "stroke-opacity": 0.5, "stroke-dasharray": "3 3", class: `gap-${keyName}` }));
       svg.append(s("path", { d, fill: "none", stroke: COLORS[keyName], "stroke-width": 2,
                              "stroke-linejoin": "round", "stroke-linecap": "round", class: `line-${keyName}` }));
       // direct label at the end of the line
@@ -172,6 +195,7 @@ export function progressChart() {
       svg.append(t);
     }
     spreadEndLabels();
+    gapKey.hidden = !gaps;
 
     // PB progression: the best single so far, as a dotted step line
     let best = -1, steps = "";
@@ -272,9 +296,10 @@ export function progressChart() {
     tip.replaceChildren(
       h("div.tip-head", { text: `#${row.n}${row.case ? `  ·  ${row.case}` : ""}` }),
       line(fmtSolve(row), "single"),
-      line(fmt(row.ao3), "ao3", COLORS.ao3),
-      line(fmt(row.ao5), "ao5", COLORS.ao5),
-      line(fmt(row.ao12), "ao12", COLORS.ao12),
+      line(fmt(row.ao3), avgLabel(3), COLORS.ao3),
+      line(fmt(row.ao5), avgLabel(5), COLORS.ao5),
+      line(fmt(row.ao12), avgLabel(12), COLORS.ao12),
+      ...(skipDnf ? [h("div.tip-date", { text: "averages leave out DNFs" })] : []),
       line(fmt(pbSoFar[hover]), "PB so far"),
       ...BEST_KEYS.filter((k) => bestAt[k] === hover).map((k) => h("div.tip-note", { text: `★ best ${k}` })),
       ...(pbSoFar[hover] != null && row.time === pbSoFar[hover] && (hover === 0 || pbSoFar[hover - 1] !== row.time)
@@ -282,6 +307,12 @@ export function progressChart() {
       ...(row.note ? [h("div.tip-note", { text: `⚑ ${row.note}` })] : []),
       h("div.tip-date", { text: row.ts }));
     tip.hidden = false;
+    function avgLabel(k) {
+      const v = row[`ao${k}`];
+      if (v !== "DNF" && v !== Infinity) return `ao${k}`;
+      const misses = data.slice(Math.max(0, hover - k + 1), hover + 1).filter((r) => r.penalty === "dnf").length;
+      return `ao${k} · ${misses} DNF${misses === 1 ? "" : "s"}`;
+    }
     const left = cx + 14 + 170 > width ? cx - 14 - 170 : cx + 14;
     tip.style.left = `${left}px`;
     tip.style.top = `${PAD.top}px`;
@@ -321,5 +352,6 @@ export function progressChart() {
   }).observe(el);
 
   return { el, update, show, get points() { return data.length; },
-           get pbCount() { return pbCount; }, get bestAt() { return { ...bestAt }; } };
+           get pbCount() { return pbCount; }, get bestAt() { return { ...bestAt }; },
+           get gaps() { return gaps; } };
 }

@@ -584,7 +584,7 @@ class PreviousSolve(ctk.CTkFrame):
 
 
 # Statistics: a summary (session | all time) and the averages (now | session best | all-time best)
-SUMMARY_ROWS = [("count", "Solves"), ("best", "Best"), ("worst", "Worst"), ("mean", "Mean"),
+SUMMARY_ROWS = [("count", "Solves"), ("dnf_rate", "DNF rate"), ("best", "Best"), ("worst", "Worst"), ("mean", "Mean"),
                 ("sd", "Std dev")]
 AVERAGE_NS = (3, 5, 12, 50, 100)
 # the side panel's single table (session | all time)
@@ -596,7 +596,16 @@ COMPACT_ROWS = [("count", "Solves"), ("best", "Best"), ("mean", "Mean"), ("sd", 
 def stat_text(stats, key):
     if key == "count":
         return f"{stats['count']}  ({stats['dnf']} DNF)" if stats["dnf"] else str(stats["count"])
+    if key == "dnf_rate":
+        return "—" if stats["dnf_rate"] is None else f"{stats['dnf_rate'] * 100:.1f}%"
     return fmt(stats[key])
+
+
+def average_rule(stats):
+    """One line saying how DNFs count in the averages shown (web: averageRule)."""
+    if stats.get("skip_dnf"):
+        return "DNFs are left out of these averages (finished solves only)."
+    return "WCA averages: a DNF counts as the slowest time, so two in an ao5 or ao12 make it a DNF."
 
 
 class StatsBlock(tk.Frame):
@@ -621,12 +630,18 @@ class StatsBlock(tk.Frame):
         heads, self.cells = self._table(left, ["Session", "All time"], [l for _, l in self.rows], 2)
         self.session_head = heads[0]
         self.avg_cells = []
+        self.rule = self.right = None
         if not compact:
             left.grid(row=0, column=0, sticky="nw", padx=(0, _px(parent, 28)))
-            right = tk.Frame(self, bg=bg)
+            self.right = right = tk.Frame(self, bg=bg)
             right.grid(row=0, column=1, sticky="nw")
             _, self.avg_cells = self._table(right, ["Current", "Session best", "All-time best"],
                                             [f"ao{n}" for n in AVERAGE_NS], 3)
+            # how DNFs count; StatsScreen puts its switch on the row below (row 8)
+            self.rule = tk.Label(right, text="", bg=bg, fg="gray55", anchor="w", justify="left",
+                                 font=(family, -_px(parent, 11)), wraplength=_px(parent, 380))
+            self.rule.grid(row=len(AVERAGE_NS) + 1, column=0, columnspan=4, sticky="w",
+                           pady=(_px(parent, 3), 0))
 
     def _table(self, frame, head, labels, ncols):
         pad = _px(self, 18)
@@ -649,6 +664,8 @@ class StatsBlock(tk.Frame):
         for (key, _), (a, b) in zip(self.rows, self.cells):
             a.configure(text=stat_text(session, key))
             b.configure(text=stat_text(all_time, key))
+        if self.rule is not None:
+            self.rule.configure(text=average_rule(session))
         older = all_time["count"] > session["count"]
         for n, (now, sbest, abest) in zip(AVERAGE_NS, self.avg_cells):
             key = f"best_ao{n}"
@@ -2142,7 +2159,8 @@ class ProgressChart(tk.Canvas):
     x = solve number, y = time. Grey dots are single solves (+2: hollow ring,
     DNF: an x along the top), blue / orange lines the ao5 / ao12 (a DNF average
     breaks the line), a ring marks the PB and a dotted step line the PB so far,
-    a diamond (aqua / blue / orange) where the best ao3 / ao5 / ao12 ended, and
+    a diamond (aqua / blue / orange) where the best ao3 / ao5 / ao12 ended, a
+    faded dashed bridge across each DNF gap in a line (WCA averages), and
     in "All time" a hairline with the session's name marks each session change.
     A legend runs along the top. Moving the mouse snaps a
     crosshair to the nearest solve and shows its values. Redrawn on resize,
@@ -2163,6 +2181,7 @@ class ProgressChart(tk.Canvas):
         self._mono = ("Consolas", -_px(parent, 11))
         self._data, self._names, self._all = [], {}, False
         self.pb_so_far, self.best_at, self.pb_count = [], {}, 0
+        self.skip_dnf, self.gaps = False, 0
         self._job = None
         self._size = (0, 0)
         self.points = 0
@@ -2170,8 +2189,9 @@ class ProgressChart(tk.Canvas):
         self.bind("<Motion>", self._on_motion)
         self.bind("<Leave>", lambda e: self.delete("hover"))
 
-    def update_rows(self, rows, names=None, all_sessions=False):
-        """rows: Database.solve_table rows, newest first."""
+    def update_rows(self, rows, names=None, all_sessions=False, skip_dnf=False):
+        """rows: Database.solve_table rows, newest first; skip_dnf: averages leave DNFs out."""
+        self.skip_dnf = skip_dnf
         self._data = list(reversed(rows))
         self._names = names or {}
         self._all = all_sessions
@@ -2246,7 +2266,6 @@ class ProgressChart(tk.Canvas):
                                          anchor="w", fill=c["muted"], font=self._font)
                         last_label = xs
 
-        self._legend(w)
         r = _px(self, 1.8 if n > 400 else 3)
         band = top - _px(self, 12)
         for i, row in enumerate(data):
@@ -2263,17 +2282,25 @@ class ProgressChart(tk.Canvas):
                 self.create_oval(cx - r, cy - r, cx + r, cy + r, fill=c["single"], outline="", tags="dot")
 
         ends = []
+        self.gaps = 0
         for key in ("ao12", "ao5"):
-            seg, last = [], None
+            seg, last, in_gap, end = [], None, False, None
             for i, row in enumerate(data):
                 v = num(row[key])
                 if v is None:
                     if len(seg) >= 4:
                         self.create_line(*seg, fill=c[key], width=2, capstyle="round", joinstyle="round", tags=key)
                     seg = []
+                    in_gap = in_gap or row[key] == DNF
                     continue
+                if in_gap and end:
+                    self._bridge(end, (self._xs(i), self._ys(v)), key)
+                in_gap = False
                 seg += [self._xs(i), self._ys(v)]
+                end = (self._xs(i), self._ys(v))
                 last = i
+            if in_gap and end:        # still a DNF average at the latest solve
+                self._bridge(end, (self._xs(n - 1), end[1]), key)
             if len(seg) >= 4:
                 self.create_line(*seg, fill=c[key], width=2, capstyle="round", joinstyle="round", tags=key)
             if last is not None:
@@ -2324,6 +2351,8 @@ class ProgressChart(tk.Canvas):
             self.create_oval(bx - pr, by - pr, bx + pr, by + pr, outline=c["text"], width=1.5, tags="pb")
             label(bx, by, f"PB {fmt(data[best]['time'])}", self._bold, below=True)
 
+        self._legend(w)
+
         # best ao3 / ao5 / ao12: a diamond with a surface ring where each ended
         for key in self.BEST_KEYS:
             b = None
@@ -2339,6 +2368,14 @@ class ProgressChart(tk.Canvas):
                                 outline=self.cget("bg"), width=2, tags=("best", f"best_{key}"))
             label(bx, by, f"best {key} {fmt(data[b][key])}", self._mono)
 
+    def _bridge(self, a, b, key):
+        """A faded dashed line across a DNF gap in an average's line."""
+        # half way between the line's colour and the background (Tk has no line opacity)
+        fg, bg = self.winfo_rgb(self.COLORS[key]), self.winfo_rgb(self.cget("bg"))
+        faded = "#" + "".join(f"{(f + b_) // 512:02x}" for f, b_ in zip(fg, bg))
+        self.create_line(*a, *b, fill=faded, width=1.5, dash=(3, 3), tags=("gap", f"gap_{key}"))
+        self.gaps += 1
+
     def _legend(self, w):
         """One row of keys along the top: what each mark means."""
         c, y, u = self.COLORS, _px(self, 11), (lambda v: _px(self, v))
@@ -2347,6 +2384,8 @@ class ProgressChart(tk.Canvas):
                  ("line", c["ao5"], "ao5"), ("line", c["ao12"], "ao12"), ("pb", c["text"], "PB"),
                  ("steps", c["steps"], "PB progression"), ("diamond", c["ao3"], "Best ao3"),
                  ("diamond", c["ao5"], "Best ao5"), ("diamond", c["ao12"], "Best ao12")]
+        if self.gaps:
+            items.append(("gap", c["ao5"], "DNF average"))
         for kind, color, text in items:
             if kind == "dot":
                 self.create_oval(x + u(6), y - u(3), x + u(12), y + u(3), fill=color, outline="")
@@ -2358,6 +2397,8 @@ class ProgressChart(tk.Canvas):
                 self.create_line(x + u(12), y - u(3), x + u(6), y + u(3), fill=color, width=1.4)
             elif kind == "line":
                 self.create_line(x + u(1), y, x + u(17), y, fill=color, width=2, capstyle="round")
+            elif kind == "gap":
+                self.create_line(x + u(1), y, x + u(17), y, fill=color, width=1.5, dash=(3, 3))
             elif kind == "steps":
                 self.create_line(x + u(1), y - u(3), x + u(8), y - u(3), x + u(8), y + u(3),
                                  x + u(17), y + u(3), fill=color, width=1.5, dash=(2, 2))
@@ -2396,9 +2437,12 @@ class ProgressChart(tk.Canvas):
         pb = self.pb_so_far[i] if i < len(self.pb_so_far) else None
         lines = [f"#{row['n']}" + (f"  ·  {row['case']}" if row["case"] else ""),
                  f"{fmt_solve(row['seconds'], row['penalty'])}  single",
-                 f"{fmt(row.get('ao3'))}  ao3", f"{fmt(row['ao5'])}  ao5", f"{fmt(row['ao12'])}  ao12",
+                 *(f"{fmt(row.get(f'ao{k}'))}  {self._avg_label(i, k)}" for k in (3, 5, 12)),
                  f"{fmt(pb)}  PB so far"]
         colors = [c["text"], c["text"], c["ao3"], c["ao5"], c["ao12"], c["text"]]
+        if self.skip_dnf:
+            lines.append("averages leave out DNFs")
+            colors.append(c["muted"])
         marks = [f"★ best {k}" for k in self.BEST_KEYS if self.best_at.get(k) == i]
         if pb is not None and row["time"] == pb and (i == 0 or self.pb_so_far[i - 1] != pb):
             marks.append("★ new PB")
@@ -2418,6 +2462,13 @@ class ProgressChart(tk.Canvas):
             self.create_text(bx + _px(self, 8), by + _px(self, 6) + k * lh, text=text, anchor="nw",
                              fill=color, font=self._bold if k == 0 else self._font, tags="hover")
         self.hover = i
+
+    def _avg_label(self, i, k):
+        """ao<k>, or for a DNF average how many DNFs are in it."""
+        if self._data[i].get(f"ao{k}") != DNF:
+            return f"ao{k}"
+        misses = sum(r["penalty"] == "dnf" for r in self._data[max(0, i - k + 1):i + 1])
+        return f"ao{k} · {misses} DNF{'' if misses == 1 else 's'}"
 
     def _on_motion(self, event):
         if not self._data:
@@ -2541,6 +2592,11 @@ class StatsScreen(ctk.CTkFrame):
                                       if isinstance(tab.cget("fg_color"), (list, tuple))
                                       else tab.cget("fg_color"))
         self.stats_block.grid(row=1, column=0, padx=8, pady=(2, 4), sticky="w")
+        # OLL / PLL only: averages over finished solves (on by default) or WCA averages
+        self.skip_dnf = ctk.CTkSwitch(self.stats_block.right, text="Leave DNFs out of OLL / PLL averages",
+                                      font=ctk.CTkFont(size=12), text_color="gray55",
+                                      bg_color=self.stats_block.cget("bg"), command=self._toggle_skip_dnf)
+        self.skip_dnf.grid(row=len(AVERAGE_NS) + 2, column=0, columnspan=4, sticky="w", pady=(4, 0))
 
         self.buttons = SolveButtons(tab, lambda a: self.actions.run(self._selected_tuple(), a))
         self.buttons.grid(row=2, column=0, padx=4, pady=(2, 0), sticky="w")
@@ -2603,6 +2659,11 @@ class StatsScreen(ctk.CTkFrame):
         self.tell(cube_io.summary_text(summary))
         return summary
 
+    def _toggle_skip_dnf(self):
+        """Save the OLL / PLL average rule (shared with the web app) and repaint."""
+        self.db.set_setting("averages_skip_dnf", bool(self.skip_dnf.get()))
+        self._set()
+
     def _set(self, mode=None, scope=None):
         if mode:
             self._mode = mode
@@ -2661,8 +2722,10 @@ class StatsScreen(ctk.CTkFrame):
             self.session_picker.set_mode(mode, titles[mode])
         else:
             self.session_picker.refresh()
-        self.stats_block.update_stats(db.session_name(mode), db.stats(mode, "session"),
-                                      db.stats(mode))
+        session_stats = db.stats(mode, "session")
+        self.stats_block.update_stats(db.session_name(mode), session_stats, db.stats(mode))
+        (self.skip_dnf.grid if mode != "full" else self.skip_dnf.grid_remove)()
+        (self.skip_dnf.select if db.get_settings()["averages_skip_dnf"] else self.skip_dnf.deselect)()
         chart_view = self.view_seg.get() == "Chart"
         if mode != "full" and self._case_menu_for != mode:
             self._case_menu_for = mode
@@ -2677,10 +2740,11 @@ class StatsScreen(ctk.CTkFrame):
             case = None if mode == "full" or self.case_menu.get() == "All cases" else self.case_menu.get()
             rows, _total = db.solve_table(mode, scope, limit=self.CHART_LIMIT, case_name=case)
             names = {n: name for n, name, _c, _l in db.list_sessions(mode)}
-            self.chart.update_rows(rows, names, scope == "all")
+            self.chart.update_rows(rows, names, scope == "all", skip_dnf=session_stats["skip_dnf"])
             where = f"“{db.session_name(mode)}”" if scope == "session" else "all sessions"
+            rule = average_rule(session_stats) if mode != "full" else ""
             self.table_note.configure(text=f"{len(rows)} solve(s){f' of {case}' if case else ''} "
-                                           f"in {where}.  Move the mouse over the chart for values.")
+                                           f"in {where}.  {rule}  Move the mouse over the chart for values.")
             return
         self.chart.grid_remove()
         self._scroll["Solves"].grid()
