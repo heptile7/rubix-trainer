@@ -39,11 +39,24 @@ n0 = len(db.get("full", limit=10000))
 full = app.screen("full"); app.show_screen("full"); pump()
 full.timer_toggle(); pump(); time.sleep(0.3); pump()
 check("full running", full._state == "running")
+check("previous-solve card hidden in an empty session", not full.prev.winfo_manager()
+      or db.stats("full", "session")["count"] > 0)
+timed_on = full._scramble
 full.timer_toggle(); pump()
-check("full stopped", full._state == "stopped", full.timer_label.cget("text"))
+shown = full.timer_label.cget("text")
+check("stop deals the next scramble at once", full._state == "idle" and full._scramble != timed_on, shown)
+check("the time stays on the clock", shown != "0.00" and full.timer_label.cget("text_color") == g.C_STOPPED)
 check("full time saved", len(db.get("full", limit=10000)) == n0 + 1)
+check("previous-solve card shows it", bool(full.prev.winfo_manager())
+      and full.prev.time_label.cget("text").startswith(shown)
+      and full.prev.scramble_label.cget("text") == timed_on)
+full.last_bar.buttons["+2"].invoke(); pump()
+check("card +2 changes that solve", db.solves("full", "session", limit=1)[0][3] == "+2"
+      and full.prev.time_label.cget("text").endswith("+"))
+full.last_bar.buttons["ok"].invoke(); pump()
 full.timer_toggle(); pump()
-check("full back to idle", full._state == "idle")
+check("next press starts the next solve", full._state == "running")
+full.timer_toggle(); pump()
 
 # --- OLL / PLL trainers ---
 for mode in ("oll", "pll"):
@@ -51,10 +64,13 @@ for mode in ("oll", "pll"):
     check(f"{mode} has case", s._current_case is not None,
           s._current_case and s._current_case["name"])
     k0 = len(db.get(mode, limit=10000))
+    solved = s._current_case["name"]
     s.timer_toggle(); pump(); time.sleep(0.2); s.timer_toggle(); pump()
     rows = db.get(mode, limit=10000)
     check(f"{mode} attempt saved", len(rows) == k0 + 1)
-    s.timer_toggle(); pump()
+    check(f"{mode} next case dealt at once", s._state == "idle" and s._current_case["name"] != solved,
+          f"{solved} -> {s._current_case['name']}")
+    check(f"{mode} card shows the solved case", s.prev.case_label.cget("text") == solved)
     # every source in the From menu deals a case from its pool (or nothing if empty)
     for key, label in s._source_options():
         s.set_source(key); pump(3)
@@ -103,7 +119,7 @@ check("stats after records", app.screen("stats").winfo_ismapped())
 # --- sessions: penalty / flag / delete / new session (dialogs replaced) ---
 full = app.screen("full"); app.show_screen("full"); pump()
 for _ in range(2):
-    full.timer_toggle(); pump(3); time.sleep(0.12); full.timer_toggle(); pump(3); full.timer_toggle(); pump(3)
+    full.timer_toggle(); pump(3); time.sleep(0.12); full.timer_toggle(); pump(3)
 newest = db.solves("full", "session", limit=1)[0][0]
 full.last_bar.buttons["dnf"].invoke(); pump()
 check("last solve DNF", db.solve(newest)[4] == "dnf")
@@ -127,7 +143,7 @@ check("new named session", db.stats("full", "session")["count"] == 0 and db.stat
       and db.session_name("full") == "GUI Check Cube" and not panel._rows
       and pick.menu.get().startswith("GUI Check Cube"))
 new_n = db.current_session("full")
-full.timer_toggle(); pump(3); time.sleep(0.12); full.timer_toggle(); pump(3); full.timer_toggle(); pump(3)
+full.timer_toggle(); pump(3); time.sleep(0.12); full.timer_toggle(); pump(3)
 label = next(l for l, n in pick._numbers.items() if n == old_n)
 pick._on_pick(label); pump()
 check("switch back to the earlier session", db.current_session("full") == old_n
@@ -157,15 +173,16 @@ check("hold: auto-repeat ignored, ready", full._state == "holding"
       and full.timer_label.cget("text_color") == g.C_RUNNING)
 up(); pump(3); t[0] += 6.5; down(); up(); pump(3)
 check("hold: timed solve saved", abs(newest("full")[2] - 6.5) < 1e-6 and newest("full")[3] is None)
-down(); up(); pump(3)
+check("hold: stop's release doesn't start another", full._state == "idle"
+      and full.timer_label.cget("text") == "6.50")
 full.options._save("inspection.full", True)
 down(); up(); pump(3)
 check("inspection counts down", full._state == "inspecting" and full.timer_label.cget("text") == "15")
 t[0] += 15.5; pump(3); down(); t[0] += 0.4; up(); t[0] += 3; down(); up(); pump(3)
 check("inspection over 15 s is +2", newest("full")[3] == "+2")
-down(); up(); pump(3); down(); up(); t[0] += 17.5; pump(5)
-check("inspection over 17 s is a DNF", full._state == "stopped" and newest("full")[3] == "dnf")
-down(); up(); pump(3)
+down(); up(); t[0] += 17.5; pump(5)
+check("inspection over 17 s is a DNF", full._state == "idle" and newest("full")[3] == "dnf"
+      and full.timer_label.cget("text") == "DNF")
 full.options._save("inspection.full", False)
 oll = app.screen("oll"); app.show_screen("oll"); pump()
 oll.clock = lambda: t[0]

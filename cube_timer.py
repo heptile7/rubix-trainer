@@ -588,6 +588,11 @@ class Database:
         return self.conn.execute(
             f"SELECT mode,{_SOLVE_COLS} FROM times WHERE id=?", (solve_id,)).fetchone()
 
+    def scramble_of(self, solve_id):
+        """The scramble an attempt was timed on ("" if none was stored)."""
+        row = self.conn.execute("SELECT scramble FROM times WHERE id=?", (solve_id,)).fetchone()
+        return (row[0] or "") if row else ""
+
     def set_penalty(self, solve_id, penalty):
         if penalty not in PENALTIES:
             raise ValueError(f"unknown penalty {penalty!r}")

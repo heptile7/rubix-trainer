@@ -215,8 +215,12 @@ def create_app(db_path=DB_PATH):
         return [effective(r[2], r[3]) for r in rows if r[3] != "dnf"][:CASE_N]
 
     def recent(mode):
-        """The current session's latest attempts, newest first."""
-        return [solve_json(r) for r in db.solves(mode, "session", limit=HISTORY)]
+        """The current session's latest attempts, newest first, with their scrambles."""
+        rows = db.solves(mode, "session", limit=HISTORY)
+        scrambles = dict(db.conn.execute(
+            f"SELECT id, scramble FROM times WHERE id IN ({','.join('?' * len(rows))})",
+            [r[0] for r in rows]).fetchall()) if rows else {}
+        return [dict(solve_json(r), scramble=scrambles.get(r[0]) or "") for r in rows]
 
     def stats(mode):
         """Stats of the selected session and of all time, plus the session list."""

@@ -116,7 +116,7 @@ class TimerScreenBase(ctk.CTkFrame):
     """
     The timer state machine (a port of web/js/timer.js):
 
-        idle -> [inspecting] -> [holding -> ready] -> running -> stopped -> (next) idle
+        idle -> [inspecting] -> [holding -> ready] -> running -> (saved, next dealt) idle
 
     Space: timer_press() / timer_release(). The Start button: timer_toggle(),
     which never holds. With inspection on, the first press-and-release starts
@@ -124,6 +124,10 @@ class TimerScreenBase(ctk.CTkFrame):
     turns green, and releasing then starts the clock. A running clock stops on
     the press. WCA inspection (Full Solve) gives +2 after 15 s and ends the
     attempt as a DNF after 17 s; practice inspection has no penalties.
+
+    Stopping saves the attempt and deals the next scramble at once (_advance);
+    the time stays on the clock, in yellow, until the next attempt starts. The
+    previous solve can be reviewed and corrected in the PreviousSolve card.
 
     Subclasses create self.timer_label and self.start_btn, set self.mode, and
     implement _next() and _save_result(elapsed, penalty).
@@ -156,11 +160,7 @@ class TimerScreenBase(ctk.CTkFrame):
         self._swallow = False      # a new press: any release we were waiting for is past
         if self._state == "running":
             self._stop(now)
-            self._swallow = True
-            return
-        if self._state == "stopped":
-            self._next()
-            self._swallow = True
+            self._swallow = True    # this key's release must not start the next attempt
             return
         if self._state == "holding":
             return
@@ -205,8 +205,6 @@ class TimerScreenBase(ctk.CTkFrame):
             self._start(now)
         elif self._state == "running":
             self._stop(now)
-        elif self._state == "stopped":
-            self._next()
 
     def _cancel_timer(self):
         """Called by the app when switching away from this screen."""
@@ -237,6 +235,8 @@ class TimerScreenBase(ctk.CTkFrame):
         self._hold_from = self._state
         self._hold_start = now
         self._state = "holding"
+        if self._hold_from == "idle":     # the previous time may still be showing
+            self.timer_label.configure(text="0.00")
         self.timer_label.configure(text_color=C_HOLDING)
         self._loop()
 
@@ -273,20 +273,30 @@ class TimerScreenBase(ctk.CTkFrame):
             self.root.after_cancel(self._timer_id)
             self._timer_id = None
         elapsed      = max(0.0, now - self._start_time)
-        self._state  = "stopped"
-        self.start_btn.configure(text="Next  [space]")
-        self.timer_label.configure(text=fmt_solve(elapsed, self._penalty), text_color=C_STOPPED)
+        self._state  = "idle"
         self._save_result(elapsed, self._penalty)
+        self._advance(fmt_solve(elapsed, self._penalty), C_STOPPED)
 
     def _dnf(self):
         """WCA inspection ran past 17 s: the attempt is a DNF."""
         if self._timer_id:
             self.root.after_cancel(self._timer_id)
             self._timer_id = None
-        self._state = "stopped"
-        self.start_btn.configure(text="Next  [space]")
-        self.timer_label.configure(text="DNF", text_color=C_DNF)
+        self._state = "idle"
         self._save_result(0.0, "dnf")
+        self._advance("DNF", C_DNF)
+
+    def _advance(self, shown, color):
+        """
+        After an attempt is saved: deal the next scramble straight away, but
+        keep the result on the clock (and the "Saved …" line) until the next
+        attempt starts.
+        """
+        note = self.status_label.cget("text")
+        self._next()                  # resets the clock to 0.00 and loads the next one
+        self.timer_label.configure(text=shown, text_color=color)
+        self.status_label.configure(text=note)
+        self._balance_timer_row()
 
     def _tick(self):
         now = self.clock()
@@ -331,6 +341,41 @@ class TimerScreenBase(ctk.CTkFrame):
     # ------------------------------------------------------------------
     # Case panel (OLL / PLL screens): picture on the left, text on the right
     # ------------------------------------------------------------------
+    def _build_timer_row(self, row, pady, show_case=False):
+        """
+        The big clock with the PreviousSolve card in the empty space to its left.
+        Column 2 mirrors the card's width when there is room, so the clock stays
+        centred; in a narrow window it shrinks to 0 and the clock moves right
+        instead of overlapping the card.
+        """
+        box = ctk.CTkFrame(self, fg_color="transparent")
+        box.grid(row=row, column=0, padx=16, pady=pady, sticky="ew")
+        box.grid_columnconfigure(1, weight=1)
+        self.prev = PreviousSolve(box, self.db, self._last_action, show_case=show_case)
+        self.prev.grid(row=0, column=0, sticky="w")
+        self.prev.grid_remove()
+        self.last_bar = self.prev.buttons      # OK / +2 / DNF / Flag for the newest solve
+        self.timer_label = ctk.CTkLabel(
+            box, text="0.00",
+            font=ctk.CTkFont(family="Consolas", size=72, weight="bold"),
+            text_color=C_IDLE,
+        )
+        self.timer_label.grid(row=0, column=1, padx=8)
+        self._timer_box = box
+        box.bind("<Configure>", lambda e: self._balance_timer_row(), add="+")
+
+    def _show_previous(self, solve):
+        self.prev.show(solve)
+        self._balance_timer_row()
+
+    def _balance_timer_row(self):
+        box = getattr(self, "_timer_box", None)
+        if box is None:
+            return
+        card = self.prev.winfo_reqwidth() if self.prev.winfo_manager() else 0
+        room = box.winfo_width() >= 2 * card + self.timer_label.winfo_reqwidth() + 40
+        box.grid_columnconfigure(2, minsize=card if card and room else 0)
+
     def _build_case_panel(self, case_panel):
         case_panel.configure(fg_color=C_PANEL)
         case_panel.grid_columnconfigure(0, weight=1)
@@ -447,20 +492,23 @@ class SolveButtons(ctk.CTkFrame):
     ACTIONS = [("ok", "OK", 40), ("+2", "+2", 40), ("dnf", "DNF", 46),
                ("flag", "⚑ Flag", 70), ("note", "Note…", 56), ("delete", "✕", 30)]
 
-    def __init__(self, parent, on_action, actions=None):
+    def __init__(self, parent, on_action, actions=None, per_row=None):
         super().__init__(parent, fg_color="transparent")
         keep = actions or [a for a, _, _ in self.ACTIONS]
         self.label = ctk.CTkLabel(self, text="", height=26, font=ctk.CTkFont(size=12),
                                   text_color="gray60")
-        self.label.grid(row=0, column=0, padx=(0, 6))
+        if per_row is None:
+            self.label.grid(row=0, column=0, padx=(0, 6))
         self.buttons = {}
-        for col, (act, text, width) in enumerate(
-                [a for a in self.ACTIONS if a[0] in keep], start=1):
+        for i, (act, text, width) in enumerate([a for a in self.ACTIONS if a[0] in keep]):
             btn = ctk.CTkButton(self, text=text, width=width, height=26,
                                 font=ctk.CTkFont(size=12), fg_color="gray30",
                                 hover_color="#6B0000" if act == "delete" else "gray40",
                                 command=lambda a=act: on_action(a))
-            btn.grid(row=0, column=col, padx=2)
+            if per_row is None:      # one row after the label
+                btn.grid(row=0, column=i + 1, padx=2)
+            else:                    # wrapped, no label (the caller shows the solve)
+                btn.grid(row=i // per_row, column=i % per_row, padx=2, pady=2, sticky="ew")
             self.buttons[act] = btn
         self._shown = None
 
@@ -480,6 +528,60 @@ class SolveButtons(ctk.CTkFrame):
                           fg_color="#1f6aa5" if on.get(act) else "gray30")
         if "flag" in self.buttons:
             self.buttons["flag"].configure(text="⚑ Unflag" if flagged else "⚑ Flag")
+
+
+class PreviousSolve(ctk.CTkFrame):
+    """
+    The card beside the clock: the previous solve's time (and case), the
+    scramble it was timed on, and OK / +2 / DNF / Flag for it. The timer deals
+    the next scramble as soon as a solve stops, so this is where a solve is
+    reviewed and corrected. Hidden while the session has no solves.
+    """
+
+    WIDTH = 190
+
+    def __init__(self, parent, db, on_action, show_case=False):
+        super().__init__(parent, fg_color=C_PANEL, corner_radius=8, width=self.WIDTH)
+        self.db = db
+        self.show_case = show_case
+        self.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(self, text="PREVIOUS SOLVE", height=16, font=ctk.CTkFont(size=10),
+                     text_color="gray55").grid(row=0, column=0, padx=10, pady=(8, 0), sticky="w")
+        self.time_label = ctk.CTkLabel(self, text="", height=26, anchor="w",
+                                       font=ctk.CTkFont(family="Consolas", size=20, weight="bold"))
+        self.time_label.grid(row=1, column=0, padx=10, sticky="w")
+        self.case_label = ctk.CTkLabel(self, text="", height=16, anchor="w",
+                                       font=ctk.CTkFont(size=12), text_color="gray65")
+        if show_case:
+            self.case_label.grid(row=2, column=0, padx=10, sticky="w")
+        self.scramble_label = ctk.CTkLabel(self, text="", anchor="w", justify="left",
+                                           wraplength=self.WIDTH - 24,
+                                           font=ctk.CTkFont(family="Consolas", size=11),
+                                           text_color="gray70")
+        self.scramble_label.grid(row=3, column=0, padx=10, pady=(2, 2), sticky="w")
+        self.buttons = SolveButtons(self, on_action, actions=["ok", "+2", "dnf", "flag"], per_row=2)
+        self.buttons.grid(row=4, column=0, padx=8, pady=(2, 8), sticky="ew")
+        self._shown = None
+        self._scrambles = {}       # solve id -> scramble (they never change)
+
+    def show(self, solve):
+        """Show a Database.solves() tuple, or hide the card for None."""
+        self.buttons.show(solve)
+        if solve is None:
+            self._shown = None
+            self.grid_remove()
+            return
+        sid, case, seconds, penalty, flagged = solve[:5]
+        look = (sid, penalty, bool(flagged))
+        if look != self._shown:
+            self._shown = look
+            if sid not in self._scrambles:
+                self._scrambles[sid] = self.db.scramble_of(sid)
+            self.time_label.configure(text=fmt_solve(seconds, penalty) + ("  \u2691" if flagged else ""),
+                                      text_color=C_DNF if penalty == "dnf" else C_STOPPED)
+            self.case_label.configure(text=case or "")
+            self.scramble_label.configure(text=self._scrambles[sid] or "(no scramble stored)")
+        self.grid()
 
 
 STAT_ROWS = [("count", "Solves"), ("best", "Best"), ("worst", "Worst"), ("mean", "Mean"),
@@ -832,13 +934,8 @@ class FullSolveScreen(TimerScreenBase):
         )
         self.scramble_label.grid(row=0, column=0, padx=16, pady=14)
 
-        # Timer
-        self.timer_label = ctk.CTkLabel(
-            self, text="0.00",
-            font=ctk.CTkFont(family="Consolas", size=72, weight="bold"),
-            text_color=C_IDLE,
-        )
-        self.timer_label.grid(row=2, column=0, pady=10)
+        # Timer, with the previous solve beside it
+        self._build_timer_row(row=2, pady=10)
 
         # Status
         self.status_label = ctk.CTkLabel(
@@ -869,10 +966,6 @@ class FullSolveScreen(TimerScreenBase):
             fg_color="gray30", hover_color="#6B0000",
             command=self._delete_last,
         ).grid(row=0, column=2, padx=8)
-
-        # Penalty / flag for the newest solve
-        self.last_bar = SolveButtons(self, self._last_action, actions=["ok", "+2", "dnf", "flag"])
-        self.last_bar.grid(row=5, column=0, pady=(2, 2))
 
         # Result bar
         self.result_label = ctk.CTkLabel(
@@ -915,11 +1008,11 @@ class FullSolveScreen(TimerScreenBase):
         self.db.add("full", elapsed, scramble=self._scramble, penalty=penalty)
         log.info("full solve: %s", fmt_solve(elapsed, penalty))
         if penalty == "dnf":
-            text = "DNF: inspection went past 17 s  —  press SPACE for next scramble"
+            text = "DNF: inspection went past 17 s  —  next scramble is ready"
         else:
             text = (f"Saved  {fmt_solve(elapsed, penalty)}"
                     + ("  (inspection over 15 s)" if penalty else "")
-                    + "  —  press SPACE for next scramble")
+                    + "  —  next scramble is ready")
         self.status_label.configure(text=text)
         self.session.refresh()
         self._refresh_times()
@@ -932,8 +1025,7 @@ class FullSolveScreen(TimerScreenBase):
         """Result bar (this session's latest 12) and the newest solve's buttons."""
         rows = self.db.solves("full", "session", limit=12)
         self.result_label.configure(text=result_bar_text([effective(r[2], r[3]) for r in rows]))
-        newest = rows[0] if rows else None
-        self.last_bar.show(newest, f"Last solve {fmt_solve(newest[2], newest[3])}:" if newest else "")
+        self._show_previous(rows[0] if rows else None)
 
     def _last_action(self, action):
         self.session.actions.run(self._newest(), action)
@@ -1510,13 +1602,8 @@ class CaseTrainerScreen(TimerScreenBase):
         case_panel.grid(row=3, column=0, padx=20, pady=6, sticky="ew")
         self._build_case_panel(case_panel)
 
-        # --- Timer ---
-        self.timer_label = ctk.CTkLabel(
-            self, text="0.00",
-            font=ctk.CTkFont(family="Consolas", size=72, weight="bold"),
-            text_color=C_IDLE,
-        )
-        self.timer_label.grid(row=4, column=0, pady=4)
+        # --- Timer, with the previous solve beside it ---
+        self._build_timer_row(row=4, pady=4, show_case=True)
 
         self.status_label = ctk.CTkLabel(
             self, text="", font=ctk.CTkFont(size=12), text_color="gray55",
@@ -1544,9 +1631,6 @@ class CaseTrainerScreen(TimerScreenBase):
             fg_color="gray30", hover_color="#6B0000",
             command=self._delete_last,
         ).grid(row=0, column=2, padx=8)
-
-        self.last_bar = SolveButtons(self, self._last_action, actions=["ok", "+2", "dnf", "flag"])
-        self.last_bar.grid(row=7, column=0, pady=(2, 2))
 
         self.result_label = ctk.CTkLabel(
             self, text="", font=ctk.CTkFont(size=13), text_color="gray65",
@@ -1802,14 +1886,13 @@ class CaseTrainerScreen(TimerScreenBase):
         self.db.add(self.mode, elapsed, case_name=self._current_case["name"],
                     scramble=self._scramble, penalty=penalty)
         log.info("%s attempt: %s %s", self.mode, self._current_case["name"], fmt(elapsed))
-        self.status_label.configure(text=f"Saved  {fmt(elapsed)}  —  press SPACE for next case")
+        self.status_label.configure(text=f"Saved  {fmt_solve(elapsed, penalty)}  —  next case is ready")
         self._refresh_history()
 
     def _refresh_result_bar(self):
         """This case's latest 12 times, and the newest solve's penalty / flag buttons."""
         rows = self.db.solves(self.mode, "session", limit=1)
-        newest = rows[0] if rows else None
-        self.last_bar.show(newest, f"Last solve {fmt_solve(newest[2], newest[3])}:" if newest else "")
+        self._show_previous(rows[0] if rows else None)
         if not self._current_case:
             return
         times = [t for t, _ in self.db.get(self.mode, case_name=self._current_case["name"], limit=12)]

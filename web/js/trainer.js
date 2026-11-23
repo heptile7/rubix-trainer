@@ -10,7 +10,7 @@ import { diagramSvg } from "./diagram.js";
 import { Timer } from "./timer.js";
 import { h, fmt, STATUSES, SLOWEST_COUNT, titleCase, groupOrder, pick, pickWeighted, resultBar, toast } from "./util.js";
 import { selectionTools, casePicker } from "./widgets.js";
-import { sessionPanel, lastSolveBar } from "./solves.js";
+import { sessionPanel, previousSolve } from "./solves.js";
 import { timerOptions } from "./options.js";
 
 const PICK_HINT = "Click: select  •  double-click: pin";
@@ -60,7 +60,8 @@ export function trainerScreen(store, mode, title) {
   const statusLine = h("div.status-line");
   const startBtn = h("button.btn.big.primary", { type: "button", text: "Start  [space]" });
   const result = h("div.result-bar");
-  const last = lastSolveBar(store, mode);
+  const last = previousSolve(store, mode, { showCase: true });
+  let saved = null;         // "Saved …" line, kept while the next case is dealt
 
   const main = h("div.timer-main", null,
     h("h1", { text: title, style: "margin:0 0 2px" }),
@@ -72,13 +73,12 @@ export function trainerScreen(store, mode, title) {
       h("div.case-head", null, pic, h("div.case-text", null, nameEl, groupEl, algEl)),
       h("div.caption", { text: "SCRAMBLE" }),
       scrambleEl),
-    timerLabel,
+    h("div.timer-row", null, last.el, timerLabel, h("div.timer-spacer")),
     statusLine,
     h("div.row", null,
       startBtn,
       h("button.btn.big", { type: "button", text: "Next Case", onclick: () => pickNextCase() }),
       h("button.btn.big.danger", { type: "button", text: "Delete Last", onclick: deleteLast })),
-    last.el,
     result,
     timerOptions(store, mode).el);
 
@@ -241,7 +241,8 @@ export function trainerScreen(store, mode, title) {
     groupEl.textContent = c.group;
     showAlg();
     statusSeg.set(titleCase(status(c)));
-    statusLine.textContent = note || READY;
+    statusLine.textContent = saved || note || READY;
+    saved = null;
     picker.refresh(c.name);
     refreshResult();
     deal.then((d) => {
@@ -293,9 +294,9 @@ export function trainerScreen(store, mode, title) {
       const times = store.caseTimes[mode][name] || (store.caseTimes[mode][name] = []);
       times.unshift(seconds);
       times.length = Math.min(times.length, 12);
-      store.recent[mode].unshift({ id: null, case: name, seconds, penalty: null, flagged: false, note: null, ts: "" });
+      store.recent[mode].unshift({ id: null, case: name, seconds, penalty: null, flagged: false, note: null, ts: "", scramble });
       refreshHistory();
-      statusLine.textContent = `Saved  ${fmt(seconds)}  —  press SPACE for next case`;
+      saved = `Saved  ${fmt(seconds)}  —  next case is ready`;
       api.addTime({ mode, case: name, seconds, scramble }).then((r) => store.applyTimes(mode, name, r));
     },
   });

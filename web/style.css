@@ -110,6 +110,32 @@ select {
 .timer.holding { color: #ff4d4d; }        /* Space is down, not long enough yet */
 .timer.ready { color: var(--running); }    /* release now to start */
 .timer.inspecting { color: var(--stopped); }
+
+/* clock row: [previous solve] [clock] [empty], as 1fr auto 1fr. The side columns
+   share the room equally, so the clock is centred while the card fits in its
+   half; when it doesn't, the card's column keeps its width (an fr column never
+   goes below its content) and the clock moves right instead of overlapping.
+   On phones the card goes under the clock. */
+.timer-main { container-type: inline-size; }
+.timer-row { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+             width: 100%; gap: 12px; }
+.timer-row > .prev-solve { justify-self: start; }
+.prev-solve {
+  width: 200px; background: var(--panel); border-radius: var(--radius); padding: 8px 10px 10px;
+  text-align: left; display: flex; flex-direction: column; gap: 2px;
+}
+.prev-solve[hidden] { display: none !important; }
+.prev-solve .caption { margin: 0; }
+.prev-time { font: 700 20px var(--mono); color: var(--stopped); }
+.prev-time.dnf { color: #ff6b6b; }
+.prev-case { font-size: 12px; color: #a6a6a6; }
+.prev-scramble { font: 11px/1.45 var(--mono); color: #b3b3b3; word-spacing: 2px; margin: 2px 0 4px; }
+.prev-acts { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.prev-acts .btn { width: 100%; }
+@container (max-width: 460px) {
+  .timer-row { grid-template-columns: 1fr; justify-items: center; }
+  .timer-row > .prev-solve { order: 2; justify-self: center; }
+}
 .timer-options { display: flex; align-items: center; justify-content: center; flex-wrap: wrap;
                  gap: 6px 10px; color: var(--muted); font-size: 12px; margin-top: 4px; }
 .timer-options .switch { font-size: 12px; color: var(--muted); }

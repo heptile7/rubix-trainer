@@ -114,7 +114,9 @@ Two small differences in the web app:
 | Case Gallery | A large picture of every OLL and PLL case, grouped by shape, with its name, algorithm and learning status. Click cases to build a practice set. |
 | Statistics | For Full Solve, OLL or PLL: session and all-time stats, and every solve with its ao5 / ao12, for this session or all time, optionally flagged solves only. Each row has +2 / DNF / flag / delete. A **Chart** view plots your progress. Also count / best / average for every OLL and PLL case. |
 
-**Space** starts the timer, stops it, then moves on to the next scramble or case. Each time is saved when the timer stops; **Delete Last** removes the most recent one.
+**Space** starts the timer and stops it. Stopping saves the time and deals the next scramble or case straight away, so you can go on solving with no extra key press. The time you just did stays on the clock, in yellow, until you start the next one. **Delete Last** removes the most recent solve.
+
+**Previous solve.** The card to the left of the clock shows the solve you just did: its time, the case (OLL / PLL), and the scramble it was timed on, so you can check that you scrambled it right. Under them, **OK / +2 / DNF / ⚑ Flag** correct it or mark it for later. The card stays until your next solve replaces it, and it's hidden while the session has no solves. In a narrow window the clock moves right to make room for it; on a phone-sized screen it goes under the clock.
 
 ### Progress chart
 
@@ -140,7 +142,7 @@ The switches under the timer change how a solve starts. They are saved and share
 
 Full Solve, OLL and PLL each keep their own list of named **sessions**, for example one per cube (*GAN 12*, *MoYu OH*). The menu at the top of the session column picks the session that new solves go into; its history and stats show below, next to the **all-time** stats of every session together. **New…** creates a session (asking for a name), **Rename…** renames the selected one, and **Delete…** deletes it with its solves (after asking; the last session can't be deleted). Statistics has the same menu. **Delete Last** only removes solves from the selected session. The stats are: number of solves (and DNFs), best, worst, mean, the current ao5 / ao12 / ao50 / ao100, and the best ao5 and ao12.
 
-- **Under the timer**, *Last solve* has **OK / +2 / DNF / ⚑ Flag** for the attempt you just did.
+- **Beside the clock**, the *Previous solve* card has **OK / +2 / DNF / ⚑ Flag** for the attempt you just did, with its time, case and scramble.
 - **In the history**, click any solve to fix it: **+2** adds two seconds, **DNF** marks it as not finished, **OK** clears the penalty, **✕** deletes it (for a mis-start or any solve that shouldn't count). Click the same button again to undo a penalty.
 - **⚑ Flag** marks a solve for later, with an optional note such as *lucky PLL skip*. Flagged solves show ⚑ in the history; **Note…** changes the note, **Unflag** removes the flag and note. In Statistics, **Flagged only** lists them.
 

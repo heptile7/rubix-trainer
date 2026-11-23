@@ -1,6 +1,6 @@
 // The timer state machine of TimerScreenBase, with inspection and hold to start:
 //
-//   idle -> [inspecting] -> [holding -> ready] -> running -> stopped -> (next) idle
+//   idle -> [inspecting] -> [holding -> ready] -> running -> (saved, next dealt) idle
 //
 // Keys:  press(at) / release(at) for Space down / up (at = event.timeStamp, the
 // moment the key moved).  Button:  toggle(at) - instant, never holds.
@@ -9,8 +9,10 @@
 //   inspecting  press holds (or starts at once with hold off).
 //   holding     the timer turns red; after holdMs it turns green (ready).
 //               Release when ready starts the clock; earlier goes back.
-//   running     press stops (at keydown, so the time is exact).
-//   stopped     press deals the next scramble; its release is swallowed.
+//   running     press stops (at keydown, so the time is exact): the attempt is
+//               saved (onStop) and the next scramble dealt at once (onNext); the
+//               time stays on the clock, in yellow, until the next attempt starts.
+//               That key's release is swallowed.
 // WCA inspection (Full Solve): starting after 15 s is +2, after 17 s a DNF,
 // which ends the attempt at once. Practice inspection has no penalties.
 // The display is redrawn once per frame, only when its text changes.
@@ -51,7 +53,6 @@ export class Timer {
   press(at = performance.now()) {
     this._swallow = false;    // a new press: any release we were waiting for is past
     if (this.state === "running") { this._stop(at); this._swallow = true; return; }
-    if (this.state === "stopped") { this.onNext(); this._swallow = true; return; }
     if (this.state === "holding") return;
     if (this.state === "idle") this._opts = this.options();
     const { inspection = 0, holdMs = 0 } = this._opts;
@@ -77,7 +78,6 @@ export class Timer {
       else this._run(at);
     } else if (this.state === "inspecting" || this.state === "holding") this._run(at);
     else if (this.state === "running") this._stop(at);
-    else this.onNext();
   }
 
   // ---- states -----------------------------------------------------------------
@@ -122,17 +122,24 @@ export class Timer {
   _stop(at) {
     cancelAnimationFrame(this._frame);
     const seconds = Math.max(0, (at - this._start) / 1000);
-    this._set("stopped", "stopped", "Next  [space]");
-    this._show(this._penalty === "+2" ? `${fmt(seconds + 2)}+` : fmt(seconds));
+    this.state = "idle";
     this.onStop(seconds, this._penalty);
+    this._advance(this._penalty === "+2" ? `${fmt(seconds + 2)}+` : fmt(seconds));
+  }
+
+  /** After a save: deal the next scramble now, keep the result on the clock. */
+  _advance(text) {
+    this.onNext();                    // resets the clock to 0.00 and deals the next one
+    this._set("idle", "stopped", "Start  [space]");
+    this._show(text);
   }
 
   /** Inspection ran past 17 s: the attempt is a DNF. */
   _dnf() {
     cancelAnimationFrame(this._frame);
-    this._set("stopped", "stopped", "Next  [space]");
-    this._show("DNF");
+    this.state = "idle";
     this.onStop(0, "dnf");
+    this._advance("DNF");
   }
 
   // ---- display ------------------------------------------------------------------

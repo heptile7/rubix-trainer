@@ -61,23 +61,34 @@ with sync_playwright() as p:
     def start():
         page.keyboard.down("Space"); page.wait_for_timeout(400); page.keyboard.up("Space")
 
-    # --- Full solve: space start / stop / next
+    # --- Full solve: space start / stop (which deals the next scramble at once)
+    state = lambda: page.evaluate("window.cubeApp.screens.full.timer.state")
     n0 = rows("full")
+    timed_on = page.inner_text(".shown .scramble-box")
     start(); page.wait_for_timeout(350)
     check("full running", page.locator(".shown .timer.running").count() == 1)
     page.keyboard.press("Space")
-    check("full stopped", page.locator(".shown .timer.stopped").count() == 1, page.inner_text(".shown .timer"))
+    shown = page.inner_text(".shown .timer")
+    check("stop deals the next scramble at once", state() == "idle"
+          and page.inner_text(".shown .scramble-box") != timed_on, shown)
+    check("the time stays on the clock", shown != "0.00" and page.locator(".shown .timer.stopped").count() == 1)
     page.wait_for_timeout(200)
     check("full saved", rows("full") == n0 + 1)
     check("full result bar", "Last:" in page.inner_text(".shown .result-bar"))
-    old = page.inner_text(".shown .scramble-box")
-    page.keyboard.press("Space")
-    check("full next scramble", page.inner_text(".shown .scramble-box") != old and page.locator(".shown .timer.running").count() == 0)
+    card = ".shown .timer-row .prev-solve"
+    check("previous-solve card shows it", page.is_visible(card)
+          and page.inner_text(f"{card} .prev-time").startswith(shown)
+          and page.inner_text(f"{card} .prev-scramble") == timed_on)
+    check("card buttons enabled once saved", page.locator(f"{card} button[data-act='+2']").is_enabled())
+    box = lambda sel: page.locator(sel).bounding_box()
+    t_box, c_box, main_box = box(".shown .timer"), box(card), box(".shown .timer-main")
+    centre = t_box["x"] + t_box["width"] / 2 - (main_box["x"] + main_box["width"] / 2)
+    check("card left of the clock, clock centred", c_box["x"] + c_box["width"] <= t_box["x"] and abs(centre) < 4,
+          f"offset {centre:.1f}px")
     page.click("text=Delete Last"); page.wait_for_timeout(200)
     check("full delete last", rows("full") == n0)
 
     # --- hold to start and inspection
-    state = lambda: page.evaluate("window.cubeApp.screens.full.timer.state")
     page.keyboard.down("Space"); page.wait_for_timeout(100)
     check("hold: red while held", "holding" in page.get_attribute(".shown .timer", "class"))
     page.keyboard.up("Space"); page.wait_for_timeout(50)
@@ -86,7 +97,8 @@ with sync_playwright() as p:
     check("hold: green when ready", "ready" in page.get_attribute(".shown .timer", "class"))
     page.keyboard.up("Space"); page.wait_for_timeout(100)
     check("hold: release starts", state() == "running", state())
-    page.keyboard.press("Space"); page.wait_for_timeout(250); page.keyboard.press("Space")
+    page.keyboard.press("Space"); page.wait_for_timeout(250)
+    check("stop's release doesn't start another", state() == "idle", state())
     page.click(".shown .timer-options label:has-text('Inspection') input"); page.wait_for_timeout(200)
     page.keyboard.press("Space"); page.wait_for_timeout(150)
     check("inspection counts down", state() == "inspecting" and page.inner_text(".shown .timer") in ("15", "14"))
@@ -94,10 +106,10 @@ with sync_playwright() as p:
     check("inspection +2 shown", page.inner_text(".shown .timer") == "+2")
     start(); page.wait_for_timeout(150); page.keyboard.press("Space"); page.wait_for_timeout(300)
     check("inspection +2 saved", last_penalty("full") == "+2")
-    page.keyboard.press("Space"); page.keyboard.press("Space"); page.wait_for_timeout(100)
+    page.keyboard.press("Space"); page.wait_for_timeout(100)
     page.evaluate("window.cubeApp.screens.full.timer._inspStart -= 17500"); page.wait_for_timeout(300)
-    check("inspection over 17 s is a DNF", state() == "stopped" and last_penalty("full") == "dnf")
-    page.keyboard.press("Space")
+    check("inspection over 17 s is a DNF", state() == "idle" and last_penalty("full") == "dnf"
+          and page.inner_text(".shown .timer") == "DNF")
     page.click(".shown .timer-options label:has-text('Inspection') input"); page.wait_for_timeout(200)
     check("settings saved", rows_table("settings", "key='inspection.full' AND value='false'") == 1)
 
@@ -108,11 +120,10 @@ with sync_playwright() as p:
     for _ in range(2):
         start(); page.wait_for_timeout(120)
         page.keyboard.press("Space"); page.wait_for_timeout(250)
-        page.keyboard.press("Space"); page.wait_for_timeout(50)
-    page.click(".shown .last-solve button[data-act=dnf]"); page.wait_for_timeout(250)
+    page.click(".shown .prev-solve button[data-act=dnf]"); page.wait_for_timeout(250)
     check("last solve DNF", last_penalty("full") == "dnf")
     check("history shows DNF", page.inner_text(".shown .history.solves li[data-id] .time") == "DNF")
-    page.click(".shown .last-solve button[data-act='+2']"); page.wait_for_timeout(250)
+    page.click(".shown .prev-solve button[data-act='+2']"); page.wait_for_timeout(250)
     check("last solve +2", last_penalty("full") == "+2")
     page.locator(".shown .history.solves li[data-id]").nth(1).click()
     answers.append("check test")
@@ -157,11 +168,9 @@ with sync_playwright() as p:
     check("oll picture", page.locator(f"{oll} .case-head svg rect").count() >= 9)
     page.wait_for_timeout(200)   # let the next deal prefetch
     k0 = rows("oll")
-    start(); page.wait_for_timeout(200); page.keyboard.press("Space")
-    page.wait_for_timeout(200)
-    check("oll attempt saved", rows("oll") == k0 + 1)
-    check("oll history", page.locator(f"{oll} .history li").count() >= 1)
-    old_scr = page.inner_text(f"{oll} .case-scramble")
+    timed_on = page.inner_text(f"{oll} .case-scramble")
+    start(); page.wait_for_timeout(200)
+    # the Space that stops the clock also shows the next case's (prefetched) scramble
     ms = page.evaluate("""() => new Promise(res => {
         const el = document.querySelector('.shown .case-scramble'); const before = el.textContent;
         const t = performance.now();
@@ -169,7 +178,13 @@ with sync_playwright() as p:
         obs.observe(el, {childList: true, characterData: true, subtree: true});
         window.dispatchEvent(new KeyboardEvent('keydown', {code: 'Space', key: ' '}));
     })""")
-    check("next case, Space -> new scramble shown (ms)", ms < 30, f"{ms:.1f}")
+    page.evaluate("window.dispatchEvent(new KeyboardEvent('keyup', {code: 'Space', key: ' '}))")
+    page.wait_for_timeout(200)
+    check("oll attempt saved", rows("oll") == k0 + 1)
+    check("oll history", page.locator(f"{oll} .history li").count() >= 1)
+    check("stop -> next case's scramble shown (ms)", ms < 30, f"{ms:.1f}")
+    check("oll card shows the solved case", page.inner_text(f"{oll} .prev-solve .prev-case") == name
+          and page.inner_text(f"{oll} .prev-solve .prev-scramble") == timed_on)
     page.screenshot(path=os.path.join(SHOTS, "web_oll.png"))
 
     # sources

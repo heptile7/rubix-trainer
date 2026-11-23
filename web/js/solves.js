@@ -3,7 +3,9 @@
 //   statsBlock      - session vs all-time summary (count, best, mean, ao5 ...)
 //   solveAction     - +2 / DNF / OK, flag (with a note), note, delete
 //   sessionPanel    - "Session N" + New session, the stats and the history list
-//   lastSolveBar    - OK / +2 / DNF / Flag for the newest attempt, under the timer
+//   previousSolve   - card beside the clock: the newest attempt's time, case and
+//                     scramble, with OK / +2 / DNF / Flag (the timer deals the next
+//                     scramble on stop, so this is where a solve is reviewed)
 // Every change goes through the store, which repaints listeners via onTimes.
 
 import { h, fmt, fmtSolve } from "./util.js";
@@ -178,6 +180,33 @@ export function sessionPanel(store, mode, { title, showCase = false }) {
 }
 
 /** "Last solve: OK +2 DNF ⚑" for the newest attempt in the session. */
+export function previousSolve(store, mode, { showCase = false } = {}) {
+  const time = h("div.prev-time");
+  const caseEl = h("div.prev-case");
+  const scramble = h("div.prev-scramble");
+  const acts = h("div.prev-acts");
+  const el = h("div.prev-solve", { hidden: true, title: "The previous solve" },
+    h("div.caption", { text: "PREVIOUS SOLVE" }), time, showCase ? caseEl : null, scramble, acts);
+  acts.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-act]");
+    if (btn) solveAction(store, mode, store.recent[mode][0], btn.dataset.act);
+  });
+  function refresh() {
+    const s = store.recent[mode][0];
+    el.hidden = !s;
+    if (!s) return;
+    time.textContent = fmtSolve(s) + (s.flagged ? "  ⚑" : "");
+    time.className = "prev-time" + (s.penalty === "dnf" ? " dnf" : "");
+    caseEl.textContent = s.case || "";
+    scramble.textContent = s.scramble || "(no scramble stored)";
+    const buttons = actionButtons(s, { labels: false }).filter((b) => b.dataset.act !== "delete");
+    if (s.id == null) buttons.forEach((b) => { b.disabled = true; });   // until the server has saved it
+    acts.replaceChildren(...buttons);
+  }
+  return { el, refresh };
+}
+
+/** OK / +2 / DNF / Flag in one row (kept for other layouts; the timers use previousSolve). */
 export function lastSolveBar(store, mode) {
   const el = h("div.last-solve");
   el.addEventListener("click", (e) => {

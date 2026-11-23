@@ -5,7 +5,7 @@
 import { api } from "./api.js";
 import { Timer } from "./timer.js";
 import { h, eff, fmtSolve, generateScramble, resultBar } from "./util.js";
-import { sessionPanel, lastSolveBar } from "./solves.js";
+import { sessionPanel, previousSolve } from "./solves.js";
 import { timerOptions } from "./options.js";
 
 const READY = "Press SPACE or Start to begin";
@@ -17,8 +17,9 @@ export function fullScreen(store) {
   const startBtn = h("button.btn.big.primary", { type: "button", text: "Start  [space]" });
   const result = h("div.result-bar");
   const session = sessionPanel(store, "full", { title: "Full Solve" });
-  const last = lastSolveBar(store, "full");
+  const last = previousSolve(store, "full");
   let scramble = "";
+  let saved = null;         // "Saved …" line, kept while the next scramble is dealt
 
   function refreshTimes() {
     result.textContent = resultBar(store.recent.full.map(eff));
@@ -30,7 +31,8 @@ export function fullScreen(store) {
     timer.reset();
     scramble = generateScramble();
     scrambleBox.textContent = scramble;
-    statusLine.textContent = READY;
+    statusLine.textContent = saved || READY;
+    saved = null;
   }
 
   const timer = new Timer(timerLabel, startBtn, {
@@ -38,11 +40,11 @@ export function fullScreen(store) {
     options: () => store.timerOptions("full"),
     onStop(seconds, penalty) {
       // show it at once; the server's answer replaces the local guess
-      store.recent.full.unshift({ id: null, case: null, seconds, penalty, flagged: false, note: null, ts: "" });
+      store.recent.full.unshift({ id: null, case: null, seconds, penalty, flagged: false, note: null, ts: "", scramble });
       refreshTimes();
       const shown = fmtSolve({ seconds, penalty });
-      statusLine.textContent = penalty === "dnf" ? "DNF: inspection went past 17 s  —  press SPACE for next scramble"
-        : `Saved  ${shown}${penalty ? "  (inspection over 15 s)" : ""}  —  press SPACE for next scramble`;
+      saved = penalty === "dnf" ? "DNF: inspection went past 17 s  —  next scramble is ready"
+        : `Saved  ${shown}${penalty ? "  (inspection over 15 s)" : ""}  —  next scramble is ready`;
       api.addTime({ mode: "full", seconds, scramble, penalty }).then((r) => store.applyTimes("full", null, r));
     },
   });
@@ -52,7 +54,7 @@ export function fullScreen(store) {
   const main = h("div.timer-main", null,
     h("h1", { text: "Full Solve", style: "margin:6px 0 4px" }),
     scrambleBox,
-    timerLabel,
+    h("div.timer-row", null, last.el, timerLabel, h("div.timer-spacer")),
     statusLine,
     h("div.row", null,
       startBtn,
@@ -67,7 +69,6 @@ export function fullScreen(store) {
           }
         },
       })),
-    last.el,
     result,
     timerOptions(store, "full").el);
 
